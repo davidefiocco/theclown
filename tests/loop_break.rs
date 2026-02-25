@@ -1,0 +1,10 @@
+fn main() {
+    let mut i = 0;
+    loop {
+        if i >= 3 {
+            break;
+        }
+        i = i + 1;
+    }
+    println!("{}", i);
+}
