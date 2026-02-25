@@ -180,28 +180,28 @@ class Interpreter:
                         return True
                     return bool(self.evaluate(self._require_child(node, 2)))
                 right = self.evaluate(self._require_child(node, 2))
-                return self._apply_binary(op, left, right)
+                return self._apply_binary(op, left, right, node)
 
             case "unary_expression":
                 op = self._node_text(self._require_child(node, 0))
                 operand = self.evaluate(self._require_child(node, 1))
-                return self._apply_unary(op, operand)
+                return self._apply_unary(op, operand, node)
 
             case "type_cast_expression":
                 value = self.evaluate(self._require_child(node, 0))
                 target_type = self._node_text(self._require_child(node, 2))
-                return self._apply_cast(value, target_type)
+                return self._apply_cast(value, target_type, node)
 
             case "parenthesized_expression":
                 if len(node.children) < 2:
-                    raise ClownRuntimeError("invalid parenthesized expression")
+                    raise self._error(ClownRuntimeError, "invalid parenthesized expression", node)
                 return self.evaluate(node.children[1])
 
             case "if_expression":
                 condition_node = node.child_by_field_name("condition")
                 consequence_node = node.child_by_field_name("consequence")
                 if not condition_node or not consequence_node:
-                    raise ClownRuntimeError("invalid if expression")
+                    raise self._error(ClownRuntimeError, "invalid if expression", node)
                 condition = self.evaluate(condition_node)
                 if condition:
                     return self.evaluate(consequence_node)
@@ -219,7 +219,7 @@ class Interpreter:
             case "while_expression":
                 condition_node = node.child_by_field_name("condition")
                 if not condition_node:
-                    raise ClownRuntimeError("invalid while expression")
+                    raise self._error(ClownRuntimeError, "invalid while expression", node)
                 body = node.child_by_field_name("body")
                 try:
                     while self.evaluate(condition_node):
@@ -238,7 +238,7 @@ class Interpreter:
             case "loop_expression":
                 body = node.child_by_field_name("body")
                 if not body:
-                    raise ClownRuntimeError("invalid loop expression")
+                    raise self._error(ClownRuntimeError, "invalid loop expression", node)
                 try:
                     while True:
                         try:
@@ -252,7 +252,7 @@ class Interpreter:
             case "range_expression":
                 children = [c for c in node.children if c.type not in ("..", "..=")]
                 if len(children) != 2:
-                    raise ClownRuntimeError("invalid range expression")
+                    raise self._error(ClownRuntimeError, "invalid range expression", node)
                 start = self.evaluate(children[0])
                 end = self.evaluate(children[1])
                 inclusive = any(c.type == "..=" for c in node.children)
@@ -281,18 +281,20 @@ class Interpreter:
             case "call_expression":
                 func_name = node.child_by_field_name("function")
                 if not func_name:
-                    raise ClownRuntimeError("invalid call expression")
+                    raise self._error(ClownRuntimeError, "invalid call expression", node)
                 name = self._node_text(func_name)
                 func_def = self.functions.get(name)
                 if not func_def:
-                    raise ClownNameError(f"cannot find function `{name}`")
+                    raise self._error(
+                        ClownNameError, f"cannot find function `{name}`", node
+                    )
                 args_node = node.child_by_field_name("arguments")
                 args = []
                 if args_node:
                     for child in args_node.children:
                         if child.type not in ("(", ")", ","):
                             args.append(self.evaluate(child))
-                return self.call_func(func_def, args)
+                return self.call_func(func_def, args, node)
 
             case "return_expression":
                 value_node = node.child_by_field_name("value")
@@ -340,12 +342,19 @@ class Interpreter:
                 )
 
             case _:
-                raise OutOfDepthError(f"theclown doesn't understand {node.type} yet")
+                raise self._error(
+                    OutOfDepthError,
+                    f"theclown doesn't understand {node.type} yet",
+                    node,
+                )
 
-    def call_func(self, func_def: FunctionDef, args: list[Value]) -> Value:
+    def call_func(
+        self, func_def: FunctionDef, args: list[Value], node: Node | None = None
+    ) -> Value:
         if len(args) != len(func_def.params):
-            raise ClownRuntimeError(
-                f"function expects {len(func_def.params)} arguments, got {len(args)}"
+            raise self._error(ClownRuntimeError, 
+                f"function expects {len(func_def.params)} arguments, got {len(args)}",
+                node,
             )
         previous_env = self.env
         self.env = Environment()
@@ -386,10 +395,18 @@ class Interpreter:
     def _node_text(self, node: Node) -> str:
         return node.text.decode() if node.text else ""
 
+    def _error(
+        self, cls: type[ClownError], msg: str, node: Node | None = None
+    ) -> ClownError:
+        if node is not None:
+            line = node.start_point[0] + 1
+            return cls(f"{msg} (line {line})")
+        return cls(msg)
+
     def _require_child(self, node: Node, index: int) -> Node:
         child = node.child(index)
         if not child:
-            raise ClownRuntimeError("invalid syntax")
+            raise self._error(ClownRuntimeError, "invalid syntax", node)
         return child
 
     def _eval_for(self, node: Node) -> None:
@@ -397,11 +414,11 @@ class Interpreter:
         iterable_node = node.child_by_field_name("value")
         body = node.child_by_field_name("body")
         if not pattern or not iterable_node or not body:
-            raise ClownRuntimeError("invalid for expression")
+            raise self._error(ClownRuntimeError, "invalid for expression", node)
         loop_var = self._node_text(pattern)
         iterable = self.evaluate(iterable_node)
         if not isinstance(iterable, range):
-            raise ClownRuntimeError("for loop requires a range")
+            raise self._error(ClownRuntimeError, "for loop requires a range", node)
         self.env.push_scope()
         try:
             self.env.define(loop_var, 0, True)
@@ -441,7 +458,9 @@ class Interpreter:
             raise ClownMoveError(f"use of moved value: `{name}`")
         return value
 
-    def _apply_binary(self, op: str, left: Value, right: Value) -> Value:
+    def _apply_binary(
+        self, op: str, left: Value, right: Value, node: Node | None = None
+    ) -> Value:
         lval = cast(Any, left)
         rval = cast(Any, right)
         match op:
@@ -453,13 +472,13 @@ class Interpreter:
                 return lval * rval
             case "/":
                 if right == 0:
-                    raise ClownRuntimeError("division by zero")
+                    raise self._error(ClownRuntimeError, "division by zero", node)
                 if isinstance(left, float) or isinstance(right, float):
                     return lval / rval
                 return int(lval / rval)
             case "%":
                 if right == 0:
-                    raise ClownRuntimeError("modulo by zero")
+                    raise self._error(ClownRuntimeError, "modulo by zero", node)
                 if isinstance(left, float) or isinstance(right, float):
                     import math
                     return math.fmod(lval, rval)
@@ -477,9 +496,11 @@ class Interpreter:
             case ">=":
                 return lval >= rval
             case _:
-                raise OutOfDepthError(f"unknown operator: {op}")
+                raise self._error(OutOfDepthError, f"unknown operator: {op}", node)
 
-    def _apply_unary(self, op: str, operand: Value) -> Value:
+    def _apply_unary(
+        self, op: str, operand: Value, node: Node | None = None
+    ) -> Value:
         oval = cast(Any, operand)
         match op:
             case "-":
@@ -487,9 +508,13 @@ class Interpreter:
             case "!":
                 return not oval
             case _:
-                raise OutOfDepthError(f"unknown unary operator: {op}")
+                raise self._error(
+                    OutOfDepthError, f"unknown unary operator: {op}", node
+                )
 
-    def _apply_cast(self, value: Value, target_type: str) -> Value:
+    def _apply_cast(
+        self, value: Value, target_type: str, node: Node | None = None
+    ) -> Value:
         match target_type:
             case "f64" | "f32":
                 return float(value)  # type: ignore[arg-type]
@@ -498,8 +523,10 @@ class Interpreter:
             case "bool":
                 return bool(value)
             case _:
-                raise OutOfDepthError(
-                    f"theclown doesn't understand `as {target_type}` yet"
+                raise self._error(
+                    OutOfDepthError,
+                    f"theclown doesn't understand `as {target_type}` yet",
+                    node,
                 )
 
     def _eval_let(self, node: Node) -> None:
@@ -516,10 +543,10 @@ class Interpreter:
                 if c.type == "identifier"
             ]
             if not value_node:
-                raise ClownRuntimeError("uninitialized let is not supported")
+                raise self._error(ClownRuntimeError, "uninitialized let is not supported", node)
             value = self.evaluate(value_node)
             if not isinstance(value, tuple) or len(value) != len(names):
-                raise ClownRuntimeError("tuple destructuring length mismatch")
+                raise self._error(ClownRuntimeError, "tuple destructuring length mismatch", node)
             for n, v in zip(names, value):
                 self.env.define(n, v, mutable)
             return None
@@ -538,7 +565,7 @@ class Interpreter:
             else:
                 value = self.evaluate(value_node)
         else:
-            raise ClownRuntimeError("uninitialized let is not supported")
+            raise self._error(ClownRuntimeError, "uninitialized let is not supported", node)
         self.env.define(name, value, mutable)
         return None
 
@@ -548,22 +575,22 @@ class Interpreter:
             return None
         name = self._node_text(macro_name)
         if name != "println":
-            raise OutOfDepthError(
-                f"theclown doesn't understand {name}! yet"
+            raise self._error(
+                OutOfDepthError, f"theclown doesn't understand {name}! yet", node
             )
         token_tree = next(
             (c for c in node.children if c.type == "token_tree"), None
         )
         if not token_tree:
-            raise ClownRuntimeError("invalid println! invocation")
+            raise self._error(ClownRuntimeError, "invalid println! invocation", node)
         args = self._split_args(token_tree.children)
         if not args:
             print("", file=self.stdout)
             return None
         fmt_tokens = args[0]
         if len(fmt_tokens) != 1 or fmt_tokens[0].type != "string_literal":
-            raise ClownRuntimeError(
-                "println! requires a format string as first argument"
+            raise self._error(ClownRuntimeError, 
+                "println! requires a format string as first argument", node
             )
         format_str = self._string_value(fmt_tokens[0])
         args = args[1:]
@@ -578,7 +605,7 @@ class Interpreter:
         try:
             output = format_str.format(*values, **kwargs)
         except Exception as exc:
-            raise ClownRuntimeError("println! format error") from exc
+            raise self._error(ClownRuntimeError, "println! format error", node) from exc
         print(output, file=self.stdout)
         return None
 
@@ -606,11 +633,11 @@ class Interpreter:
 
     def _eval_token_expr(self, nodes: list[Node]) -> Value:
         if not nodes:
-            raise ClownRuntimeError("println! expects valid arguments")
+            raise self._error(ClownRuntimeError, "println! expects valid arguments")
         stream = _TokenStream(nodes)
         result = self._parse_expression(stream, 0)
         if not stream.at_end():
-            raise ClownRuntimeError("println! expects valid arguments")
+            raise self._error(ClownRuntimeError, "println! expects valid arguments", nodes[0])
         return result
 
     def _parse_expression(self, stream: _TokenStream, min_prec: int) -> Value:
@@ -621,8 +648,8 @@ class Interpreter:
                 stream.next()
                 type_token = stream.next()
                 if not type_token or type_token.type != "primitive_type":
-                    raise ClownRuntimeError("println! expects valid arguments")
-                left = self._apply_cast(left, self._node_text(type_token))
+                    raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
+                left = self._apply_cast(left, self._node_text(type_token), token)
                 continue
             if not token or token.type not in _BINARY_PRECEDENCE:
                 break
@@ -631,10 +658,10 @@ class Interpreter:
                 break
             op_token = stream.next()
             if not op_token:
-                raise ClownRuntimeError("println! expects valid arguments")
+                raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
             op = op_token.type
             right = self._parse_expression(stream, prec + 1)
-            left = self._apply_binary(op, left, right)
+            left = self._apply_binary(op, left, right, op_token)
         return left
 
     def _parse_unary(self, stream: _TokenStream) -> Value:
@@ -642,15 +669,15 @@ class Interpreter:
         if token and token.type in _UNARY_OPERATORS:
             op_token = stream.next()
             if not op_token:
-                raise ClownRuntimeError("println! expects valid arguments")
+                raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
             op = op_token.type
-            return self._apply_unary(op, self._parse_unary(stream))
+            return self._apply_unary(op, self._parse_unary(stream), op_token)
         return self._parse_primary(stream)
 
     def _parse_primary(self, stream: _TokenStream) -> Value:
         token = stream.next()
         if not token:
-            raise ClownRuntimeError("println! expects valid arguments")
+            raise self._error(ClownRuntimeError, "println! expects valid arguments")
         if token.type == "integer_literal":
             return int(self._node_text(token))
         if token.type == "float_literal":
@@ -666,10 +693,12 @@ class Interpreter:
                 args = self._eval_token_tree_args(next_token)
                 func_def = self.functions.get(self._node_text(token))
                 if not func_def:
-                    raise ClownNameError(
-                        f"cannot find value `{self._node_text(token)}` in this scope"
+                    raise self._error(
+                        ClownNameError,
+                        f"cannot find value `{self._node_text(token)}` in this scope",
+                        token,
                     )
-                return self.call_func(func_def, args)
+                return self.call_func(func_def, args, token)
             return self._get_identifier(self._node_text(token))
         if token.type == "token_tree":
             return self._eval_token_tree_expr(token)
@@ -677,14 +706,14 @@ class Interpreter:
             value = self._parse_expression(stream, 0)
             closing = stream.next()
             if not closing or closing.type != ")":
-                raise ClownRuntimeError("println! expects valid arguments")
+                raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
             return value
-        raise ClownRuntimeError("println! expects valid arguments")
+        raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
 
     def _eval_token_tree_expr(self, token_tree: Node) -> Value:
         children = token_tree.children
         if not children:
-            raise ClownRuntimeError("println! expects valid arguments")
+            raise self._error(ClownRuntimeError, "println! expects valid arguments", token_tree)
         if children[0].type == "(" and children[-1].type == ")":
             inner = children[1:-1]
         else:
