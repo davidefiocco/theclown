@@ -436,3 +436,21 @@ def test_syntax_error_swapped_braces():
 def test_println_empty():
     result = run_theclown("tests/println_empty.rs", check=True)
     assert result.stdout == "\n"
+
+
+def test_float_basic():
+    result = run_theclown("tests/float_basic.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["5.140000000000001", "6.28", "2"]
+
+
+def test_float_division():
+    result = run_theclown("tests/float_division.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["3.5", "1"]
+
+
+def test_float_negation():
+    result = run_theclown("tests/float_negation.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["-4.5", "4.5"]
