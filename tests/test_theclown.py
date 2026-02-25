@@ -403,3 +403,31 @@ def test_lc_tribonacci():
     result = run_theclown("tests/lc_tribonacci.rs", check=True)
     lines = result.stdout.strip().split("\n")
     assert lines == ["0", "4", "149"]
+
+
+def test_syntax_error():
+    result = run_theclown("tests/syntax_error.rs")
+    assert result.returncode != 0
+    assert "ClownSyntaxError" in result.stderr
+    assert "line" in result.stderr
+
+
+def test_syntax_error_bare_if():
+    result = run_theclown("tests/syntax_error_bare_if.rs")
+    assert result.returncode != 0
+    assert "ClownSyntaxError" in result.stderr
+    assert "line 2" in result.stderr
+
+
+def test_syntax_error_bad_fn():
+    result = run_theclown("tests/syntax_error_bad_fn.rs")
+    assert result.returncode != 0
+    assert "ClownSyntaxError" in result.stderr
+    assert "line 1" in result.stderr
+
+
+def test_syntax_error_swapped_braces():
+    result = run_theclown("tests/syntax_error_swapped_braces.rs")
+    assert result.returncode != 0
+    assert "ClownSyntaxError" in result.stderr
+    assert "line 1" in result.stderr

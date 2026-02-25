@@ -42,6 +42,10 @@ class ClownMoveError(ClownError):
     pass
 
 
+class ClownSyntaxError(ClownError):
+    pass
+
+
 class ClownRuntimeError(ClownError):
     pass
 
@@ -317,6 +321,15 @@ class Interpreter:
                 | "mutable_specifier"
             ):
                 return None
+
+            case "ERROR":
+                line = node.start_point[0] + 1
+                col = node.start_point[1] + 1
+                text = self._node_text(node)
+                snippet = repr(text) if len(text) <= 40 else repr(text[:40] + "...")
+                raise ClownSyntaxError(
+                    f"syntax error at line {line}, column {col} near {snippet}"
+                )
 
             case _:
                 raise OutOfDepthError(f"theclown doesn't understand {node.type} yet")
