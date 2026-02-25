@@ -521,17 +521,22 @@ class Interpreter:
             raise OutOfDepthError(
                 f"theclown doesn't understand {name}! yet"
             )
-        token_tree = node.children[2]
-        if not token_tree or token_tree.type != "token_tree":
+        token_tree = next(
+            (c for c in node.children if c.type == "token_tree"), None
+        )
+        if not token_tree:
+            raise ClownRuntimeError("invalid println! invocation")
+        args = self._split_args(token_tree.children)
+        if not args:
+            print("", file=self.stdout)
             return None
-        children = token_tree.children
-        string_literal = children[1]
-        if string_literal.type != "string_literal":
-            return None
-        format_str = self._string_value(string_literal)
-        args = self._split_args(children)
-        if args and len(args[0]) == 1 and args[0][0].type == "string_literal":
-            args = args[1:]
+        fmt_tokens = args[0]
+        if len(fmt_tokens) != 1 or fmt_tokens[0].type != "string_literal":
+            raise ClownRuntimeError(
+                "println! requires a format string as first argument"
+            )
+        format_str = self._string_value(fmt_tokens[0])
+        args = args[1:]
         kwargs = {
             name: self._rust_repr(self._get_identifier(name))
             for name in re.findall(r"\{([a-zA-Z_]\w*)\}", format_str)
