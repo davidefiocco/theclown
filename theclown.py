@@ -70,7 +70,7 @@ class _Tombstone:
     pass
 
 
-Value = int | bool | str | tuple | range | None | _Tombstone
+Value = int | float | bool | str | tuple | range | None | _Tombstone
 TOMBSTONE = _Tombstone()
 
 
@@ -158,6 +158,9 @@ class Interpreter:
 
             case "integer_literal":
                 return int(self._node_text(node))
+
+            case "float_literal":
+                return float(self._node_text(node))
 
             case "boolean_literal":
                 return self._node_text(node) == "true"
@@ -413,6 +416,10 @@ class Interpreter:
     def _rust_repr(self, value: Value) -> str:
         if isinstance(value, bool):
             return "true" if value else "false"
+        if isinstance(value, float):
+            if value == int(value) and value.is_integer():
+                return str(int(value))
+            return repr(value)
         if value is None:
             return "()"
         if isinstance(value, tuple):
@@ -421,7 +428,7 @@ class Interpreter:
         return str(value)
 
     def _is_copy_type(self, value: Value) -> bool:
-        return isinstance(value, (int, bool)) or value is None
+        return isinstance(value, (int, float, bool)) or value is None
 
     def _get_identifier(self, name: str) -> Value:
         value, _ = self.env.get(name)
@@ -442,10 +449,15 @@ class Interpreter:
             case "/":
                 if right == 0:
                     raise ClownRuntimeError("division by zero")
+                if isinstance(left, float) or isinstance(right, float):
+                    return lval / rval
                 return int(lval / rval)
             case "%":
                 if right == 0:
                     raise ClownRuntimeError("modulo by zero")
+                if isinstance(left, float) or isinstance(right, float):
+                    import math
+                    return math.fmod(lval, rval)
                 return lval - rval * int(lval / rval)
             case "==":
                 return left == right
@@ -616,6 +628,8 @@ class Interpreter:
             raise ClownRuntimeError("println! expects valid arguments")
         if token.type == "integer_literal":
             return int(self._node_text(token))
+        if token.type == "float_literal":
+            return float(self._node_text(token))
         if token.type == "boolean_literal":
             return self._node_text(token) == "true"
         if token.type == "string_literal":
