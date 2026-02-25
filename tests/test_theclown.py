@@ -431,3 +431,8 @@ def test_syntax_error_swapped_braces():
     assert result.returncode != 0
     assert "ClownSyntaxError" in result.stderr
     assert "line 1" in result.stderr
+
+
+def test_println_empty():
+    result = run_theclown("tests/println_empty.rs", check=True)
+    assert result.stdout == "\n"
