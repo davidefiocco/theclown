@@ -454,3 +454,21 @@ def test_float_negation():
     result = run_theclown("tests/float_negation.rs", check=True)
     lines = result.stdout.strip().split("\n")
     assert lines == ["-4.5", "4.5"]
+
+
+def test_cast_basic():
+    result = run_theclown("tests/cast_basic.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["42", "3"]
+
+
+def test_cast_println():
+    result = run_theclown("tests/cast_println.rs", check=True)
+    assert result.stdout.strip() == "25"
+
+
+def test_cast_unsupported():
+    result = run_theclown("tests/cast_unsupported.rs")
+    assert result.returncode != 0
+    assert "OutOfDepthError" in result.stderr
+    assert "as char" in result.stderr

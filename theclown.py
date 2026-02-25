@@ -187,6 +187,11 @@ class Interpreter:
                 operand = self.evaluate(self._require_child(node, 1))
                 return self._apply_unary(op, operand)
 
+            case "type_cast_expression":
+                value = self.evaluate(self._require_child(node, 0))
+                target_type = self._node_text(self._require_child(node, 2))
+                return self._apply_cast(value, target_type)
+
             case "parenthesized_expression":
                 if len(node.children) < 2:
                     raise ClownRuntimeError("invalid parenthesized expression")
@@ -484,6 +489,19 @@ class Interpreter:
             case _:
                 raise OutOfDepthError(f"unknown unary operator: {op}")
 
+    def _apply_cast(self, value: Value, target_type: str) -> Value:
+        match target_type:
+            case "f64" | "f32":
+                return float(value)  # type: ignore[arg-type]
+            case "i64" | "i32" | "i16" | "i8" | "u64" | "u32" | "u16" | "u8" | "isize" | "usize":
+                return int(value)  # type: ignore[arg-type]
+            case "bool":
+                return bool(value)
+            case _:
+                raise OutOfDepthError(
+                    f"theclown doesn't understand `as {target_type}` yet"
+                )
+
     def _eval_let(self, node: Node) -> None:
         pattern = node.child_by_field_name("pattern")
         if not pattern:
@@ -599,6 +617,13 @@ class Interpreter:
         left = self._parse_unary(stream)
         while True:
             token = stream.peek()
+            if token and token.type == "as" and 7 >= min_prec:
+                stream.next()
+                type_token = stream.next()
+                if not type_token or type_token.type != "primitive_type":
+                    raise ClownRuntimeError("println! expects valid arguments")
+                left = self._apply_cast(left, self._node_text(type_token))
+                continue
             if not token or token.type not in _BINARY_PRECEDENCE:
                 break
             prec = _BINARY_PRECEDENCE[token.type]
