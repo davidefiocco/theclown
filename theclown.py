@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import math
 import re
 import sys
 from dataclasses import dataclass
-from typing import Any, TextIO, cast
+from typing import Any, Callable, TextIO, cast
 
 from tree_sitter import Language, Parser, Node
 import tree_sitter_rust
@@ -70,7 +71,7 @@ class _Tombstone:
     pass
 
 
-Value = int | float | bool | str | tuple | range | None | _Tombstone
+Value = int | float | bool | str | list | tuple | range | None | _Tombstone
 TOMBSTONE = _Tombstone()
 
 
@@ -282,18 +283,25 @@ class Interpreter:
                 func_name = node.child_by_field_name("function")
                 if not func_name:
                     raise self._error(ClownRuntimeError, "invalid call expression", node)
+                args_node = node.child_by_field_name("arguments")
+                args: list[Value] = []
+                if args_node:
+                    for child in args_node.children:
+                        if child.type not in ("(", ")", ","):
+                            args.append(self.evaluate(child))
+                if func_name.type == "field_expression":
+                    return self._call_method(func_name, args, node)
+                if func_name.type == "scoped_identifier":
+                    method = self._node_text(
+                        func_name.children[-1]
+                    ) if func_name.children else self._node_text(func_name)
+                    return self._call_math(method, args, node)
                 name = self._node_text(func_name)
                 func_def = self.functions.get(name)
                 if not func_def:
                     raise self._error(
                         ClownNameError, f"cannot find function `{name}`", node
                     )
-                args_node = node.child_by_field_name("arguments")
-                args = []
-                if args_node:
-                    for child in args_node.children:
-                        if child.type not in ("(", ")", ","):
-                            args.append(self.evaluate(child))
                 return self.call_func(func_def, args, node)
 
             case "return_expression":
@@ -308,9 +316,29 @@ class Interpreter:
                 raise ReturnSignal(None)
 
             case "assignment_expression":
-                name = self._node_text(self._require_child(node, 0))
+                lhs = self._require_child(node, 0)
                 value = self.evaluate(self._require_child(node, 2))
-                self.env.set(name, value)
+                if lhs.type == "index_expression":
+                    arr_name = self._node_text(lhs.children[0])
+                    idx = self.evaluate(lhs.children[2])
+                    obj, _ = self.env.get(arr_name)
+                    if not isinstance(obj, list):
+                        raise self._error(
+                            ClownRuntimeError, "index requires an array", node
+                        )
+                    if not isinstance(idx, int):
+                        raise self._error(
+                            ClownRuntimeError, "index must be an integer", node
+                        )
+                    if idx < 0 or idx >= len(obj):
+                        raise self._error(
+                            ClownRuntimeError,
+                            f"index {idx} out of bounds for array of length {len(obj)}",
+                            node,
+                        )
+                    obj[idx] = value
+                else:
+                    self.env.set(self._node_text(lhs), value)
                 return None
 
             case "expression_statement":
@@ -323,6 +351,33 @@ class Interpreter:
                     if c.type not in ("(", ")", ",")
                 ]
                 return tuple(elements)
+
+            case "array_expression":
+                elements = [
+                    self.evaluate(c)
+                    for c in node.children
+                    if c.type not in ("[", "]", ",")
+                ]
+                return elements
+
+            case "index_expression":
+                obj = self.evaluate(node.children[0])
+                idx = self.evaluate(node.children[2])
+                if not isinstance(obj, list):
+                    raise self._error(
+                        ClownRuntimeError, "index requires an array", node
+                    )
+                if not isinstance(idx, int):
+                    raise self._error(
+                        ClownRuntimeError, "index must be an integer", node
+                    )
+                if idx < 0 or idx >= len(obj):
+                    raise self._error(
+                        ClownRuntimeError,
+                        f"index {idx} out of bounds for array of length {len(obj)}",
+                        node,
+                    )
+                return obj[idx]
 
             case (
                 "line_comment"
@@ -367,6 +422,50 @@ class Interpreter:
                 return e.value
         finally:
             self.env = previous_env
+
+    def _call_method(
+        self, field_expr: Node, args: list[Value], node: Node
+    ) -> Value:
+        obj_node = field_expr.children[0] if field_expr.children else None
+        method_node = field_expr.child_by_field_name("field")
+        if not obj_node or not method_node:
+            raise self._error(ClownRuntimeError, "invalid method call", node)
+        obj = self.evaluate(obj_node)
+        method = self._node_text(method_node)
+        if isinstance(obj, list):
+            if method == "len":
+                return len(obj)
+            if method == "push":
+                if len(args) != 1:
+                    raise self._error(
+                        ClownRuntimeError, ".push() expects 1 argument", node
+                    )
+                obj.append(args[0])
+                return None
+            if method == "pop":
+                if not obj:
+                    raise self._error(
+                        ClownRuntimeError, ".pop() on empty array", node
+                    )
+                return obj.pop()
+        return self._call_math(method, [obj] + args, node)
+
+    def _call_math(
+        self, method: str, args: list[Value], node: Node
+    ) -> Value:
+        fn = _MATH_METHODS.get(method)
+        if not fn:
+            raise self._error(
+                OutOfDepthError,
+                f"theclown doesn't understand method `{method}` yet",
+                node,
+            )
+        try:
+            return fn(*args)
+        except (ValueError, TypeError) as exc:
+            raise self._error(
+                ClownRuntimeError, f"{method}() error: {exc}", node
+            ) from exc
 
     def _register_function(self, node: Node) -> None:
         name_node = node.child_by_field_name("name")
@@ -447,6 +546,9 @@ class Interpreter:
         if isinstance(value, tuple):
             inner = ", ".join(self._rust_repr(v) for v in value)
             return f"({inner})"
+        if isinstance(value, list):
+            inner = ", ".join(self._rust_repr(v) for v in value)
+            return f"[{inner}]"
         return str(value)
 
     def _is_copy_type(self, value: Value) -> bool:
@@ -574,6 +676,17 @@ class Interpreter:
         if not macro_name:
             return None
         name = self._node_text(macro_name)
+        if name == "vec":
+            token_tree = next(
+                (c for c in node.children if c.type == "token_tree"), None
+            )
+            if not token_tree:
+                return []
+            children = token_tree.children
+            if children and children[0].type == "[" and children[-1].type == "]":
+                children = children[1:-1]
+            chunks = self._split_args(children)
+            return [self._eval_token_expr(chunk) for chunk in chunks]
         if name != "println":
             raise self._error(
                 OutOfDepthError, f"theclown doesn't understand {name}! yet", node
@@ -688,8 +801,40 @@ class Interpreter:
             return self._string_value(token)
         if token.type == "identifier":
             next_token = stream.peek()
+            if next_token and next_token.type == ".":
+                stream.next()
+                method_token = stream.next()
+                if not method_token:
+                    raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
+                method_name = self._node_text(method_token)
+                arg_tree = stream.peek()
+                method_args: list[Value] = []
+                if arg_tree and arg_tree.type == "token_tree":
+                    stream.next()
+                    method_args = self._eval_token_tree_args(arg_tree)
+                obj = self._get_identifier(self._node_text(token))
+                if isinstance(obj, list):
+                    if method_name == "len":
+                        return len(obj)
+                    if method_name == "push":
+                        obj.append(method_args[0] if method_args else None)
+                        return None
+                    if method_name == "pop":
+                        return obj.pop() if obj else None
+                return self._call_math(method_name, [obj] + method_args, token)
             if next_token and next_token.type == "token_tree":
                 stream.next()
+                tt_children = next_token.children
+                if tt_children and tt_children[0].type == "[":
+                    obj = self._get_identifier(self._node_text(token))
+                    if not isinstance(obj, list):
+                        raise self._error(ClownRuntimeError, "index requires an array", token)
+                    idx_val = self._eval_token_expr(tt_children[1:-1])
+                    if not isinstance(idx_val, int):
+                        raise self._error(ClownRuntimeError, "index must be an integer", token)
+                    if idx_val < 0 or idx_val >= len(obj):
+                        raise self._error(ClownRuntimeError, f"index {idx_val} out of bounds for array of length {len(obj)}", token)
+                    return obj[idx_val]
                 args = self._eval_token_tree_args(next_token)
                 func_def = self.functions.get(self._node_text(token))
                 if not func_def:
@@ -763,6 +908,24 @@ _BINARY_PRECEDENCE = {
 }
 
 _UNARY_OPERATORS = {"-", "!"}
+
+_MATH_METHODS: dict[str, Callable[..., float]] = {
+    "sqrt": math.sqrt,
+    "abs": abs,
+    "floor": math.floor,
+    "ceil": math.ceil,
+    "round": round,
+    "sin": math.sin,
+    "cos": math.cos,
+    "tan": math.tan,
+    "ln": math.log,
+    "log2": math.log2,
+    "log10": math.log10,
+    "powi": lambda x, n: x ** int(n),
+    "powf": pow,
+    "min": min,
+    "max": max,
+}
 
 
 def main() -> None:
