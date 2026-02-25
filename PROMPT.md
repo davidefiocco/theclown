@@ -360,3 +360,90 @@ fn main() {
 // tuple_nested_expr.rs → "3 12"
 fn main() { let (x, y) = (1 + 2, 3 * 4); println!("{} {}", x, y); }
 ```
+
+### Math builtins
+
+Method-style calls on `f64` values and scoped `f64::` free-function calls. Supported methods: `sqrt`, `abs`, `floor`, `ceil`, `round`, `sin`, `cos`, `tan`, `ln`, `log2`, `log10`, `powi`, `powf`, `min`, `max`. Unknown methods raise `OutOfDepthError`.
+
+```rust
+// math_methods.rs → "4" then "3.5" then "-4" then "-3" then "5"
+fn main() {
+    let x: f64 = 16.0;
+    println!("{}", x.sqrt());
+    let y: f64 = -3.5;
+    println!("{}", y.abs());
+    println!("{}", y.floor());
+    println!("{}", y.ceil());
+    println!("{}", x.sqrt() + 1.0);
+}
+
+// math_scoped.rs → "5" then "7"
+fn main() {
+    let x: f64 = 25.0;
+    let y: f64 = f64::sqrt(x);
+    println!("{}", y);
+    let z: f64 = f64::abs(-7.0);
+    println!("{}", z);
+}
+
+// math_trig.rs → "0" then "1" then "1"
+fn main() {
+    let x: f64 = 0.0;
+    println!("{}", x.sin());
+    println!("{}", x.cos());
+    let pi: f64 = 3.141592653589793;
+    let half_pi: f64 = pi / 2.0;
+    println!("{}", half_pi.sin());
+}
+```
+
+### Arrays and `vec![]`
+
+Fixed-size array literals (`[1, 2, 3]`) and growable `vec![]` macro. Indexing with `a[i]` for read and write. Methods: `.len()`, `.push(val)`, `.pop()`. Arrays and vecs move on assignment (use-after-move raises `ClownMoveError`). Out-of-bounds indexing raises `ClownRuntimeError`.
+
+```rust
+// array_basic.rs → "10" then "30" then "3"
+fn main() {
+    let a = [10, 20, 30];
+    println!("{}", a[0]);
+    println!("{}", a[2]);
+    println!("{}", a.len());
+}
+
+// array_mut.rs → "10 2 30"
+fn main() {
+    let mut a = [1, 2, 3];
+    a[0] = 10;
+    a[2] = 30;
+    println!("{} {} {}", a[0], a[1], a[2]);
+}
+
+// array_oob.rs → ClownRuntimeError
+fn main() {
+    let a = [1, 2, 3];
+    println!("{}", a[5]);
+}
+
+// vec_macro.rs → "3" then "3"
+fn main() {
+    let mut v = vec![1, 2];
+    v.push(3);
+    println!("{}", v.len());
+    println!("{}", v[2]);
+}
+
+// vec_pop.rs → "30" then "2"
+fn main() {
+    let mut v = vec![10, 20, 30];
+    let x = v.pop();
+    println!("{}", x);
+    println!("{}", v.len());
+}
+
+// array_move.rs → ClownMoveError
+fn main() {
+    let a = [1, 2, 3];
+    let b = a;
+    println!("{}", a[0]);
+}
+```
