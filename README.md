@@ -27,9 +27,11 @@ uv run python theclown.py tests/fib_recursive.rs
 - `break`, `continue` in all loop forms
 - Functions with parameters, recursion, and early `return`
 - `println!` with format strings and arbitrary expressions
-- Move semantics for strings (primitives copy, strings move, use-after-move raises `ClownMoveError`)
+- Move semantics for strings and arrays (primitives copy, strings/arrays move, use-after-move raises `ClownMoveError`)
 - Tuple literals and destructuring in `let` bindings
 - Type casts with `as` for numeric primitives (`i64 as f64`, `f64 as i64`, etc.); unsupported targets (e.g. `as char`) raise `OutOfDepthError`
+- Math builtins: method style (`x.sqrt()`, `x.abs()`, `x.sin()`, …) and scoped style (`f64::sqrt(x)`)
+- Arrays (`[1, 2, 3]`) and `vec![]` macro with indexing, `.len()`, `.push()`, `.pop()`
 
 ## Unsupported features
 

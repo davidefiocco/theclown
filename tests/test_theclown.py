@@ -472,3 +472,57 @@ def test_cast_unsupported():
     assert result.returncode != 0
     assert "OutOfDepthError" in result.stderr
     assert "as char" in result.stderr
+
+
+def test_math_methods():
+    result = run_theclown("tests/math_methods.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["4", "3.5", "-4", "-3", "5"]
+
+
+def test_math_scoped():
+    result = run_theclown("tests/math_scoped.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["5", "7"]
+
+
+def test_math_trig():
+    result = run_theclown("tests/math_trig.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["0", "1", "1"]
+
+
+def test_array_basic():
+    result = run_theclown("tests/array_basic.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["10", "30", "3"]
+
+
+def test_array_mut():
+    result = run_theclown("tests/array_mut.rs", check=True)
+    assert result.stdout.strip() == "10 2 30"
+
+
+def test_array_oob():
+    result = run_theclown("tests/array_oob.rs")
+    assert result.returncode != 0
+    assert "ClownRuntimeError" in result.stderr
+    assert "out of bounds" in result.stderr
+
+
+def test_vec_macro():
+    result = run_theclown("tests/vec_macro.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["3", "3"]
+
+
+def test_vec_pop():
+    result = run_theclown("tests/vec_pop.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["30", "2"]
+
+
+def test_array_move():
+    result = run_theclown("tests/array_move.rs")
+    assert result.returncode != 0
+    assert "ClownMoveError" in result.stderr or "use of moved value" in result.stderr
