@@ -79,7 +79,7 @@ impl Foo { fn new() -> Foo { Foo } }
 
 ### Arithmetic, literals, `println!`
 
-`println!` supports format strings with `{}` placeholders and named captures like `{x}`. Expressions inside `println!` arguments must be fully evaluated (including nested arithmetic and function calls).
+`println!` supports format strings with `{}` placeholders and named captures like `{x}`. Expressions inside `println!` arguments must be fully evaluated (including nested arithmetic, function calls, and `as` casts).
 
 ```rust
 // arith_precedence.rs → "7"
@@ -278,6 +278,69 @@ fn main() {
         if i % 2 == 0 { continue; }
         println!("{}", i);
     }
+}
+```
+
+### Floating-point literals and arithmetic
+
+`f64` values are supported. Mixed int/float arithmetic promotes to float. Display matches Rust: whole-number floats print without a decimal point (`42.0` displays as `42`).
+
+```rust
+// float_basic.rs → "5.140000000000001" then "6.28" then "2"
+fn main() {
+    let x: f64 = 3.14;
+    let y: f64 = 2.0;
+    println!("{}", x + y);
+    println!("{}", x * y);
+    let mut z: f64 = 1.5;
+    z = z + 0.5;
+    println!("{}", z);
+}
+
+// float_division.rs → "3.5" then "1"
+fn main() {
+    let a: f64 = 7.0;
+    let b: f64 = 2.0;
+    println!("{}", a / b);
+    let c: f64 = 5.0;
+    let d: f64 = 4.0;
+    println!("{}", c % d);
+}
+
+// float_negation.rs → "-4.5" then "4.5"
+fn main() {
+    let x: f64 = 4.5;
+    println!("{}", -x);
+    println!("{}", -(-x));
+}
+```
+
+### Type casts (`as`)
+
+Numeric `as` casts between integer and float types. Unsupported targets (e.g. `as char`) are rejected with `OutOfDepthError`. Casts also work inside `println!` macro arguments, where `as` binds tighter than arithmetic operators.
+
+```rust
+// cast_basic.rs → "42" then "3"
+fn main() {
+    let x: i64 = 42;
+    let y: f64 = x as f64;
+    println!("{}", y);
+    let z: f64 = 3.9;
+    let w: i64 = z as i64;
+    println!("{}", w);
+}
+
+// cast_println.rs → "25"
+fn main() {
+    let n: i64 = 10;
+    println!("{}", n as f64 * 2.5);
+}
+
+// cast_unsupported.rs → OutOfDepthError
+fn main() {
+    let x: i64 = 65;
+    let c = x as char;
+    println!("{}", c);
 }
 ```
 

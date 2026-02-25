@@ -20,7 +20,7 @@ uv run python theclown.py tests/fib_recursive.rs
 
 ## Supported features
 
-- Integer and boolean literals, arithmetic with correct Rust semantics (truncating division, not floor division)
+- Integer, float (`f64`), and boolean literals, arithmetic with correct Rust semantics (truncating division, not floor division)
 - `let` / `let mut` bindings, variable shadowing, block scoping
 - `if` / `else if` / `else` as expressions
 - `while`, `for` with range expressions (`..` and `..=`), `loop` with `break`-as-value
@@ -29,6 +29,7 @@ uv run python theclown.py tests/fib_recursive.rs
 - `println!` with format strings and arbitrary expressions
 - Move semantics for strings (primitives copy, strings move, use-after-move raises `ClownMoveError`)
 - Tuple literals and destructuring in `let` bindings
+- Type casts with `as` for numeric primitives (`i64 as f64`, `f64 as i64`, etc.); unsupported targets (e.g. `as char`) raise `OutOfDepthError`
 
 ## Unsupported features
 
