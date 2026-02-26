@@ -620,3 +620,12 @@ def test_option_unwrap_panic():
     assert result.returncode != 0
     assert "ClownRuntimeError" in result.stderr
     assert "None" in result.stderr
+
+
+def test_fft_recursive():
+    result = run_theclown("tests/fft_recursive.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert len(lines) == 256
+    assert lines[0] == "64 0"
+    assert lines[128] == "0 0"
+    assert lines[255] == "41.24162 40.24162"
