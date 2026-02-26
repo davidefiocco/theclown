@@ -451,6 +451,7 @@ class Interpreter:
 
             case (
                 "line_comment"
+                | "attribute_item"
                 | "primitive_type"
                 | "type_identifier"
                 | "mutable_specifier"
@@ -458,6 +459,12 @@ class Interpreter:
                 | "generic_type"
             ):
                 return None
+
+            case "reference_expression":
+                for child in node.children:
+                    if child.type not in ("&", "mutable_specifier"):
+                        return self.evaluate(child)
+                raise self._error(ClownRuntimeError, "invalid reference expression", node)
 
             case "ERROR":
                 line = node.start_point[0] + 1

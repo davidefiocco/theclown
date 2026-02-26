@@ -59,7 +59,7 @@ Comments below show expected output. "→ ErrorName" means non-zero exit with th
 
 ### Bouncer (reject unsupported syntax)
 
-Structs, `impl` blocks, and `use` declarations are now supported. The bouncer still rejects enums and traits.
+Structs, `impl` blocks, and `use` declarations are now supported. Attributes (`#[derive(...)]`, etc.) are accepted and ignored. References (`&x`, `&mut x`) are accepted as pass-through (no borrow checking). The bouncer still rejects enums and traits.
 
 ```rust
 // bouncer_enum.rs → OutOfDepthError
@@ -67,6 +67,30 @@ enum Color { Red, Green, Blue }
 
 // bouncer_trait.rs → OutOfDepthError
 trait Printable { fn print(&self); }
+
+// bouncer_attribute.rs → "42"
+#[derive(Clone)]
+struct Foo {
+    x: i64,
+}
+fn main() {
+    let f = Foo { x: 42 };
+    println!("{}", f.x);
+}
+
+// ref_passthrough.rs → "2"
+struct Counter {
+    value: i64,
+}
+fn increment(c: &mut Counter) {
+    c.value += 1;
+}
+fn main() {
+    let mut c = Counter { value: 0 };
+    increment(&mut c);
+    increment(&mut c);
+    println!("{}", c.value);
+}
 ```
 
 ### Arithmetic, literals, `println!`
