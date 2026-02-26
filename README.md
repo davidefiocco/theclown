@@ -2,9 +2,9 @@
 
 A toy/vibecoded Rust interpreter written in Python.
 
-Uses [tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust) for parsing and Python's structural pattern matching (`match`/`case`) for AST walking. The interpreter runs a meaningful subset of Rust — enough for recursion, control flow, move semantics, and tuples — in a single ~700-line file.
+Uses [tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust) for parsing and Python's structural pattern matching (`match`/`case`) for AST walking. The interpreter runs a meaningful subset of Rust — enough for structs, match expressions, Option types, recursion, control flow, and move semantics — in a single-file interpreter.
 
-Named after kRusty the Clown. Inspired by pydantic's [monty](https://github.com/pydantic/monty), which interprets a Python subset in Rust. theclown goes the other way: it interprets Rust in Python 🤡.
+Named after kRusty the Clown. Inspired by pydantic's [monty](https://github.com/pydantic/monty), which compiles a Python subset using Rust. theclown goes the other way: it interprets Rust in Python 🤡.
 
 ## Quickstart
 
@@ -22,26 +22,32 @@ uv run python theclown.py tests/fib_recursive.rs
 
 - Integer, float (`f64`), and boolean literals, arithmetic with correct Rust semantics (truncating division, not floor division)
 - `let` / `let mut` bindings, variable shadowing, block scoping
+- `const` declarations
+- Compound assignment operators (`+=`, `-=`, `*=`, `/=`, `%=`)
+- `use` declarations (accepted and ignored — no module system)
 - `if` / `else if` / `else` as expressions
+- `match` expressions with literal, wildcard (`_`), and or-pattern (`|`) arms
 - `while`, `for` with range expressions (`..` and `..=`), `loop` with `break`-as-value
 - `break`, `continue` in all loop forms
 - Functions with parameters, recursion, and early `return`
 - `println!` with format strings and arbitrary expressions
-- Move semantics for strings and arrays (primitives copy, strings/arrays move, use-after-move raises `ClownMoveError`)
+- Move semantics for strings, arrays, and structs (primitives copy, non-primitives move, use-after-move raises `ClownMoveError`)
 - Tuple literals and destructuring in `let` bindings
 - Type casts with `as` for numeric primitives (`i64 as f64`, `f64 as i64`, etc.); unsupported targets (e.g. `as char`) raise `OutOfDepthError`
 - Math builtins: method style (`x.sqrt()`, `x.abs()`, `x.sin()`, …) and scoped style (`f64::sqrt(x)`)
 - Arrays (`[1, 2, 3]`) and `vec![]` macro with indexing, `.len()`, `.push()`, `.pop()`
+- Structs: definition, construction, field access, and inherent `impl` blocks with methods (including `self` receiver)
+- Built-in `Option<T>`: `Some(x)`, `None`, `.unwrap()`, `.unwrap_or()`, `.is_some()`, `.is_none()`, and `?` early-return operator
 
 ## Unsupported features
 
 theclown uses a whitelist-based evaluator. Any Rust syntax not on the list is rejected with an `OutOfDepthError`:
 
 ```
-OutOfDepthError: theclown doesn't understand struct_item yet
+OutOfDepthError: theclown doesn't understand trait_item yet
 ```
 
-Notable exclusions: structs, enums, traits, generics, `impl` blocks, closures, references (`&` / `&mut`), pattern matching (`match` arms), and `use` declarations.
+Notable exclusions: enums (beyond built-in `Option`), traits, generics, closures, references (`&` / `&mut`), full pattern matching (destructuring enums/structs in `match` arms), and `use` for actual module resolution.
 
 ## Origin
 
