@@ -77,6 +77,13 @@ class StructInstance:
     fields: dict[str, Any]
 
 
+@dataclass
+class EnumVariant:
+    type_name: str
+    variant_name: str
+    fields: tuple
+
+
 class _OptionNone:
     def __repr__(self) -> str:
         return "None"
@@ -94,7 +101,7 @@ OPTION_NONE = _OptionNone()
 
 Value = (
     int | float | bool | str | list | tuple | range
-    | StructInstance | OptionSome | _OptionNone | None | _Tombstone
+    | StructInstance | EnumVariant | OptionSome | _OptionNone | None | _Tombstone
 )
 TOMBSTONE = _Tombstone()
 
@@ -152,12 +159,13 @@ class Interpreter:
         self.functions: dict[str, FunctionDef] = {}
         self.constants: dict[str, Value] = {}
         self.structs: dict[str, list[str]] = {}
+        self.enums: dict[str, dict[str, int]] = {}
         self.methods: dict[str, dict[str, FunctionDef]] = {}
 
     def evaluate(self, node: Node) -> Value:
         match node.type:
             case "source_file":
-                _FIRST_PASS = ("function_item", "const_item", "struct_item", "impl_item")
+                _FIRST_PASS = ("function_item", "const_item", "struct_item", "enum_item", "impl_item")
                 for child in node.children:
                     if child.type == "function_item":
                         self._register_function(child)
@@ -165,6 +173,8 @@ class Interpreter:
                         self._register_const(child)
                     elif child.type == "struct_item":
                         self._register_struct(child)
+                    elif child.type == "enum_item":
+                        self._register_enum(child)
                     elif child.type == "impl_item":
                         self._register_impl(child)
                 for child in node.children:
@@ -175,7 +185,7 @@ class Interpreter:
                     self.call_func(main_func, [])
                 return None
 
-            case "function_item" | "const_item" | "struct_item" | "impl_item":
+            case "function_item" | "const_item" | "struct_item" | "enum_item" | "impl_item":
                 return None
 
             case "block":
@@ -425,6 +435,20 @@ class Interpreter:
                     )
                 return obj[idx]
 
+            case "scoped_identifier":
+                parts = [self._node_text(c) for c in node.children if c.type != "::"]
+                if len(parts) == 2:
+                    type_name, variant = parts
+                    enum_def = self.enums.get(type_name)
+                    if enum_def is not None and variant in enum_def:
+                        if enum_def[variant] == 0:
+                            return EnumVariant(type_name, variant, ())
+                raise self._error(
+                    OutOfDepthError,
+                    f"theclown doesn't understand scoped identifier `{'::'.join(parts)}` yet",
+                    node,
+                )
+
             case "struct_expression":
                 return self._eval_struct_expr(node)
 
@@ -586,6 +610,16 @@ class Interpreter:
                         node,
                     )
                 return self.call_func(func_def, args, node)
+            enum_def = self.enums.get(type_name)
+            if enum_def is not None and method_name in enum_def:
+                expected = enum_def[method_name]
+                if len(args) != expected:
+                    raise self._error(
+                        ClownRuntimeError,
+                        f"`{type_name}::{method_name}` expects {expected} fields, got {len(args)}",
+                        node,
+                    )
+                return EnumVariant(type_name, method_name, tuple(args))
         method = self._node_text(
             scoped_id.children[-1]
         ) if scoped_id.children else self._node_text(scoped_id)
@@ -668,6 +702,31 @@ class Interpreter:
                     if fname:
                         fields.append(self._node_text(fname))
         self.structs[name] = fields
+
+    def _register_enum(self, node: Node) -> None:
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return
+        name = self._node_text(name_node)
+        variants: dict[str, int] = {}
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "enum_variant":
+                    vname_node = next(
+                        (c for c in child.children if c.type == "identifier"), None
+                    )
+                    if not vname_node:
+                        continue
+                    vname = self._node_text(vname_node)
+                    field_list = next(
+                        (c for c in child.children if c.type == "ordered_field_declaration_list"), None
+                    )
+                    arity = 0
+                    if field_list:
+                        arity = sum(1 for c in field_list.children if c.type not in ("(", ")", ","))
+                    variants[vname] = arity
+        self.enums[name] = variants
 
     def _register_impl(self, node: Node) -> None:
         type_node = node.child_by_field_name("type")
@@ -780,6 +839,11 @@ class Interpreter:
         if isinstance(value, list):
             inner = ", ".join(self._rust_repr(v) for v in value)
             return f"[{inner}]"
+        if isinstance(value, EnumVariant):
+            if value.fields:
+                inner = ", ".join(self._rust_repr(f) for f in value.fields)
+                return f"{value.type_name}::{value.variant_name}({inner})"
+            return f"{value.type_name}::{value.variant_name}"
         if isinstance(value, StructInstance):
             fields = ", ".join(
                 f"{k}: {self._rust_repr(v)}" for k, v in value.fields.items()
@@ -1011,6 +1075,25 @@ class Interpreter:
                         return False
                 return True
             return False
+        if node.type == "scoped_identifier":
+            parts = [self._node_text(c) for c in node.children if c.type != "::"]
+            if len(parts) == 2 and isinstance(value, EnumVariant):
+                return value.type_name == parts[0] and value.variant_name == parts[1]
+            return False
+        if node.type == "tuple_struct_pattern":
+            scoped = next((c for c in node.children if c.type == "scoped_identifier"), None)
+            if not scoped or not isinstance(value, EnumVariant):
+                return False
+            parts = [self._node_text(c) for c in scoped.children if c.type != "::"]
+            if len(parts) != 2 or value.type_name != parts[0] or value.variant_name != parts[1]:
+                return False
+            field_nodes = [c for c in node.children if c.type not in ("(", ")", ",", "scoped_identifier")]
+            if len(field_nodes) != len(value.fields):
+                return False
+            for field_node, field_val in zip(field_nodes, value.fields):
+                if not self._match_single(field_node, field_val, bindings):
+                    return False
+            return True
         if node.type == "identifier":
             bindings[self._node_text(node)] = value
             return True
