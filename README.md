@@ -39,6 +39,7 @@ uv run python theclown.py tests/fib_recursive.rs
 - Math builtins: method style (`x.sqrt()`, `x.abs()`, `x.sin()`, …) and scoped style (`f64::sqrt(x)`)
 - Arrays (`[1, 2, 3]`) and `vec![]` macro with indexing, `.len()`, `.push()`, `.pop()`
 - Structs: definition, construction, field access, and inherent `impl` blocks with methods (including `self` receiver)
+- Enums: unit variants (`Direction::North`) and tuple variants (`Shape::Circle(5.0)`), with `match` destructuring
 - Built-in `Option<T>`: `Some(x)`, `None`, `.unwrap()`, `.unwrap_or()`, `.is_some()`, `.is_none()`, and `?` early-return operator
 
 ## Unsupported features
@@ -49,7 +50,7 @@ theclown uses a whitelist-based evaluator. Any Rust syntax not on the list is re
 OutOfDepthError: theclown doesn't understand trait_item yet
 ```
 
-Notable exclusions: enums (beyond built-in `Option`), traits, generics, closures, full pattern matching (destructuring enums/structs in `match` arms), and `use` for actual module resolution.
+Notable exclusions: traits, generics, closures, struct-like enum variants (`Foo { x: i64 }`), `impl` blocks for enums, and `use` for actual module resolution.
 
 ## Origin
 

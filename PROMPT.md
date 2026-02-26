@@ -59,16 +59,13 @@ Comments below show expected output. "→ ErrorName" means non-zero exit with th
 
 ### Bouncer (reject unsupported syntax)
 
-Structs, `impl` blocks, and `use` declarations are now supported. Attributes (`#[derive(...)]`, etc.) are accepted and ignored. References (`&x`, `&mut x`) are accepted as pass-through (no borrow checking). The bouncer still rejects enums and traits.
+Structs, enums, `impl` blocks, and `use` declarations are now supported. Attributes (`#[derive(...)]`, etc.) are accepted and ignored. References (`&x`, `&mut x`) are accepted as pass-through (no borrow checking). The bouncer still rejects traits.
 
 ```rust
-// bouncer_enum.rs → OutOfDepthError
-enum Color { Red, Green, Blue }
-
 // bouncer_trait.rs → OutOfDepthError
 trait Printable { fn print(&self); }
 
-// bouncer_attribute.rs → "42"
+// attribute_noop.rs → "42"
 #[derive(Clone)]
 struct Foo {
     x: i64,
@@ -610,6 +607,55 @@ fn main() {
     let b = a;
     println!("{}", b.value);
     println!("{}", a.value);
+}
+```
+
+### Enums
+
+Enum definitions with unit variants and tuple variants. Construction via `Type::Variant` (unit) or `Type::Variant(args)` (tuple). Pattern matching with destructuring in `match` arms.
+
+```rust
+// enum_color.rs → "green"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+fn main() {
+    let c = Color::Green;
+    match c {
+        Color::Red => println!("red"),
+        Color::Green => println!("green"),
+        Color::Blue => println!("blue"),
+    }
+}
+
+// enum_basic.rs → "up" then "left"
+enum Direction { North, South, East, West }
+fn describe(d: Direction) -> &'static str {
+    match d {
+        Direction::North => "up",
+        Direction::South => "down",
+        Direction::East => "right",
+        Direction::West => "left",
+    }
+}
+fn main() {
+    println!("{}", describe(Direction::North));
+    println!("{}", describe(Direction::West));
+}
+
+// enum_tuple_variant.rs → "78.5" then "12"
+enum Shape { Circle(f64), Rectangle(f64, f64) }
+fn area(s: Shape) -> f64 {
+    match s {
+        Shape::Circle(r) => 3.14 * r * r,
+        Shape::Rectangle(w, h) => w * h,
+    }
+}
+fn main() {
+    println!("{}", area(Shape::Circle(5.0)));
+    println!("{}", area(Shape::Rectangle(3.0, 4.0)));
 }
 ```
 

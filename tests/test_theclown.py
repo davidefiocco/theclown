@@ -18,14 +18,14 @@ def run_theclown(rs_file, check=False):
     return result
 
 
-def test_bouncer_struct():
-    result = run_theclown("tests/bouncer_struct.rs", check=True)
+def test_struct_empty():
+    result = run_theclown("tests/struct_empty.rs", check=True)
     assert result.returncode == 0
 
 
 def test_dump_ast():
     result = subprocess.run(
-        [*THECLOWN, "--dump-ast", "tests/bouncer_struct.rs"],
+        [*THECLOWN, "--dump-ast", "tests/struct_empty.rs"],
         capture_output=True,
         text=True,
     )
@@ -34,10 +34,21 @@ def test_dump_ast():
     assert "struct_item" in result.stdout
 
 
-def test_bouncer_enum():
-    result = run_theclown("tests/bouncer_enum.rs")
-    assert result.returncode != 0
-    assert "enum_item" in result.stderr
+def test_enum_color():
+    result = run_theclown("tests/enum_color.rs", check=True)
+    assert result.stdout.strip() == "green"
+
+
+def test_enum_basic():
+    result = run_theclown("tests/enum_basic.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["up", "left"]
+
+
+def test_enum_tuple_variant():
+    result = run_theclown("tests/enum_tuple_variant.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["78.5", "12"]
 
 
 def test_bouncer_trait():
@@ -47,17 +58,17 @@ def test_bouncer_trait():
 
 
 def test_use_noop():
-    result = run_theclown("tests/bouncer_use.rs", check=True)
+    result = run_theclown("tests/use_noop.rs", check=True)
     assert result.returncode == 0
 
 
-def test_bouncer_impl():
-    result = run_theclown("tests/bouncer_impl.rs", check=True)
+def test_impl_standalone():
+    result = run_theclown("tests/impl_standalone.rs", check=True)
     assert result.returncode == 0
 
 
-def test_bouncer_attribute():
-    result = run_theclown("tests/bouncer_attribute.rs", check=True)
+def test_attribute_noop():
+    result = run_theclown("tests/attribute_noop.rs", check=True)
     assert result.stdout.strip() == "42"
 
 
