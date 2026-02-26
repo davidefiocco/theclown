@@ -19,9 +19,8 @@ def run_theclown(rs_file, check=False):
 
 
 def test_bouncer_struct():
-    result = run_theclown("tests/bouncer_struct.rs")
-    assert result.returncode != 0
-    assert "OutOfDepthError" in result.stderr or "struct_item" in result.stderr
+    result = run_theclown("tests/bouncer_struct.rs", check=True)
+    assert result.returncode == 0
 
 
 def test_dump_ast():
@@ -47,16 +46,14 @@ def test_bouncer_trait():
     assert "trait_item" in result.stderr
 
 
-def test_bouncer_use():
-    result = run_theclown("tests/bouncer_use.rs")
-    assert result.returncode != 0
-    assert "use_declaration" in result.stderr or "use" in result.stderr
+def test_use_noop():
+    result = run_theclown("tests/bouncer_use.rs", check=True)
+    assert result.returncode == 0
 
 
 def test_bouncer_impl():
-    result = run_theclown("tests/bouncer_impl.rs")
-    assert result.returncode != 0
-    assert "impl_item" in result.stderr or "impl" in result.stderr
+    result = run_theclown("tests/bouncer_impl.rs", check=True)
+    assert result.returncode == 0
 
 
 def test_arith_precedence():
@@ -526,3 +523,79 @@ def test_array_move():
     result = run_theclown("tests/array_move.rs")
     assert result.returncode != 0
     assert "ClownMoveError" in result.stderr or "use of moved value" in result.stderr
+
+
+def test_const_basic():
+    result = run_theclown("tests/const_basic.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["100", "3.14"]
+
+
+def test_compound_assign():
+    result = run_theclown("tests/compound_assign.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["15", "12", "24", "4", "1", "2"]
+
+
+def test_match_basic():
+    result = run_theclown("tests/match_basic.rs", check=True)
+    assert result.stdout.strip() == "three"
+
+
+def test_match_string():
+    result = run_theclown("tests/match_string.rs", check=True)
+    assert result.stdout.strip() == "great"
+
+
+def test_match_or_pattern():
+    result = run_theclown("tests/match_or_pattern.rs", check=True)
+    assert result.stdout.strip() == "small"
+
+
+def test_match_expr():
+    result = run_theclown("tests/match_expr.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["zero", "one", "many", "many", "many"]
+
+
+def test_struct_basic():
+    result = run_theclown("tests/struct_basic.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["1.5", "2.5"]
+
+
+def test_struct_method():
+    result = run_theclown("tests/struct_method.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["12", "14"]
+
+
+def test_struct_mut():
+    result = run_theclown("tests/struct_mut.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["0", "42"]
+
+
+def test_struct_move():
+    result = run_theclown("tests/struct_move.rs")
+    assert result.returncode != 0
+    assert "ClownMoveError" in result.stderr or "use of moved value" in result.stderr
+
+
+def test_option_basic():
+    result = run_theclown("tests/option_basic.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["42", "true", "false", "false", "true", "99"]
+
+
+def test_option_question_mark():
+    result = run_theclown("tests/option_question_mark.rs", check=True)
+    lines = result.stdout.strip().split("\n")
+    assert lines == ["14", "true", "true"]
+
+
+def test_option_unwrap_panic():
+    result = run_theclown("tests/option_unwrap_panic.rs")
+    assert result.returncode != 0
+    assert "ClownRuntimeError" in result.stderr
+    assert "None" in result.stderr
