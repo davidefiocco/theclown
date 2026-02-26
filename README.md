@@ -25,6 +25,8 @@ uv run python theclown.py tests/fib_recursive.rs
 - `const` declarations
 - Compound assignment operators (`+=`, `-=`, `*=`, `/=`, `%=`)
 - `use` declarations (accepted and ignored — no module system)
+- Attributes (`#[derive(...)]`, `#[allow(...)]`, etc.) accepted and ignored — no macro expansion
+- References (`&x`, `&mut x`) accepted as pass-through — the expression evaluates to the inner value (no borrow checking)
 - `if` / `else if` / `else` as expressions
 - `match` expressions with literal, wildcard (`_`), and or-pattern (`|`) arms
 - `while`, `for` with range expressions (`..` and `..=`), `loop` with `break`-as-value
@@ -47,7 +49,7 @@ theclown uses a whitelist-based evaluator. Any Rust syntax not on the list is re
 OutOfDepthError: theclown doesn't understand trait_item yet
 ```
 
-Notable exclusions: enums (beyond built-in `Option`), traits, generics, closures, references (`&` / `&mut`), full pattern matching (destructuring enums/structs in `match` arms), and `use` for actual module resolution.
+Notable exclusions: enums (beyond built-in `Option`), traits, generics, closures, full pattern matching (destructuring enums/structs in `match` arms), and `use` for actual module resolution.
 
 ## Origin
 

@@ -1,0 +1,8 @@
+#[derive(Clone)]
+struct Foo {
+    x: i64,
+}
+fn main() {
+    let f = Foo { x: 42 };
+    println!("{}", f.x);
+}

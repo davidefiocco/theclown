@@ -56,6 +56,16 @@ def test_bouncer_impl():
     assert result.returncode == 0
 
 
+def test_bouncer_attribute():
+    result = run_theclown("tests/bouncer_attribute.rs", check=True)
+    assert result.stdout.strip() == "42"
+
+
+def test_ref_passthrough():
+    result = run_theclown("tests/ref_passthrough.rs", check=True)
+    assert result.stdout.strip() == "2"
+
+
 def test_arith_precedence():
     result = run_theclown("tests/arith_precedence.rs", check=True)
     assert result.stdout.strip() == "7"
