@@ -1114,50 +1114,46 @@ class Interpreter:
         self.env.define(name, value, mutable)
         return None
 
-    def _eval_macro(self, node: Node) -> None:
+    def _eval_macro(self, node: Node) -> Value:
         macro_name = node.child_by_field_name("macro")
         if not macro_name:
             return None
         name = self._node_text(macro_name)
+        token_tree = next(
+            (c for c in node.children if c.type == "token_tree"), None
+        )
         if name == "vec":
-            token_tree = next(
-                (c for c in node.children if c.type == "token_tree"), None
-            )
             if not token_tree:
                 return []
-            children = token_tree.children
-            if children and children[0].type == "[" and children[-1].type == "]":
-                children = children[1:-1]
-            chunks = self._split_args(children)
-            return [self._eval_token_expr(chunk) for chunk in chunks]
+            arg_texts = self._macro_arg_texts(token_tree)
+            return [self.evaluate(self._reparse_expr(t)) for t in arg_texts]
         if name != "println":
             raise self._error(
                 OutOfDepthError, f"theclown doesn't understand {name}! yet", node
             )
-        token_tree = next(
-            (c for c in node.children if c.type == "token_tree"), None
-        )
         if not token_tree:
             raise self._error(ClownRuntimeError, "invalid println! invocation", node)
-        args = self._split_args(token_tree.children)
-        if not args:
+        arg_texts = self._macro_arg_texts(token_tree)
+        if not arg_texts:
             print("", file=self.stdout)
             return None
-        fmt_tokens = args[0]
-        if len(fmt_tokens) != 1 or fmt_tokens[0].type != "string_literal":
-            raise self._error(ClownRuntimeError, 
-                "println! requires a format string as first argument", node
-            )
-        format_str = self._string_value(fmt_tokens[0])
-        args = args[1:]
+        fmt_node = self._reparse_expr(arg_texts[0])
+        if not fmt_node or fmt_node.type != "string_literal":
+            raise self._error(ClownRuntimeError,
+                "println! requires a format string as first argument", node)
+        format_str = self._string_value(fmt_node)
+        expr_args = arg_texts[1:]
         kwargs = {
-            name: self._rust_repr(self._get_identifier(name))
-            for name in re.findall(r"\{([a-zA-Z_]\w*)\}", format_str)
+            n: self._rust_repr(self._get_identifier(n))
+            for n in re.findall(r"\{([a-zA-Z_]\w*)\}", format_str)
         }
-        if not args and not kwargs:
+        if not expr_args and not kwargs:
             print(format_str, file=self.stdout)
             return None
-        values = [self._rust_repr(self._eval_token_expr(arg)) for arg in args]
+        values = [
+            self._rust_repr(self.evaluate(self._reparse_expr(t)))
+            for t in expr_args
+        ]
         try:
             output = format_str.format(*values, **kwargs)
         except Exception as exc:
@@ -1165,234 +1161,48 @@ class Interpreter:
         print(output, file=self.stdout)
         return None
 
-    def _split_args(self, children: list[Node]) -> list[list[Node]]:
-        tokens = children
-        if tokens and tokens[0].type == "(" and tokens[-1].type == ")":
-            tokens = tokens[1:-1]
-        args: list[list[Node]] = []
+    def _reparse_expr(self, text: str) -> Node:
+        wrapper = f"fn _() {{ let _ = {text}; }}"
+        tree = TREE_PARSER.parse(bytes(wrapper, "utf8"))
+        func = tree.root_node.children[0]
+        block = next(c for c in func.children if c.type == "block")
+        let_decl = next(c for c in block.children if c.type == "let_declaration")
+        value = let_decl.child_by_field_name("value")
+        if not value:
+            raise ClownRuntimeError(f"failed to parse expression: {text}")
+        return value
+
+    def _macro_arg_texts(self, token_tree: Node) -> list[str]:
+        children = token_tree.children
+        if not children:
+            return []
+        if children[0].type in ("(", "[") and children[-1].type in (")", "]"):
+            children = children[1:-1]
+        groups: list[list[Node]] = []
         current: list[Node] = []
         depth = 0
-        for child in tokens:
-            if child.type == "(":
+        for child in children:
+            if child.type in ("(", "["):
                 depth += 1
-            elif child.type == ")":
+            elif child.type in (")", "]"):
                 depth -= 1
             if child.type == "," and depth == 0:
                 if current:
-                    args.append(current)
+                    groups.append(current)
                     current = []
                 continue
             current.append(child)
         if current:
-            args.append(current)
-        return args
+            groups.append(current)
+        source = token_tree.text
+        if not source:
+            return []
+        base = token_tree.start_byte
+        return [
+            source[g[0].start_byte - base : g[-1].end_byte - base].decode()
+            for g in groups
+        ]
 
-    def _eval_token_expr(self, nodes: list[Node]) -> Value:
-        if not nodes:
-            raise self._error(ClownRuntimeError, "println! expects valid arguments")
-        stream = _TokenStream(nodes)
-        result = self._parse_expression(stream, 0)
-        if not stream.at_end():
-            raise self._error(ClownRuntimeError, "println! expects valid arguments", nodes[0])
-        return result
-
-    def _parse_expression(self, stream: _TokenStream, min_prec: int) -> Value:
-        left = self._parse_unary(stream)
-        while True:
-            token = stream.peek()
-            if token and token.type == "as" and 7 >= min_prec:
-                stream.next()
-                type_token = stream.next()
-                if not type_token or type_token.type != "primitive_type":
-                    raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
-                left = self._apply_cast(left, self._node_text(type_token), token)
-                continue
-            if not token or token.type not in _BINARY_PRECEDENCE:
-                break
-            prec = _BINARY_PRECEDENCE[token.type]
-            if prec < min_prec:
-                break
-            op_token = stream.next()
-            if not op_token:
-                raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
-            op = op_token.type
-            right = self._parse_expression(stream, prec + 1)
-            left = self._apply_binary(op, left, right, op_token)
-        return left
-
-    def _parse_unary(self, stream: _TokenStream) -> Value:
-        token = stream.peek()
-        if token and token.type in _UNARY_OPERATORS:
-            op_token = stream.next()
-            if not op_token:
-                raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
-            op = op_token.type
-            return self._apply_unary(op, self._parse_unary(stream), op_token)
-        return self._parse_primary(stream)
-
-    def _parse_primary(self, stream: _TokenStream) -> Value:
-        token = stream.next()
-        if not token:
-            raise self._error(ClownRuntimeError, "println! expects valid arguments")
-        if token.type == "integer_literal":
-            return int(self._node_text(token))
-        if token.type == "float_literal":
-            return float(self._node_text(token))
-        if token.type == "boolean_literal":
-            return self._node_text(token) == "true"
-        if token.type == "string_literal":
-            return self._string_value(token)
-        if token.type == "identifier":
-            result: Value
-            next_token = stream.peek()
-            if next_token and next_token.type == "token_tree":
-                stream.next()
-                tt_children = next_token.children
-                if tt_children and tt_children[0].type == "[":
-                    obj = self._get_identifier(self._node_text(token))
-                    if not isinstance(obj, list):
-                        raise self._error(ClownRuntimeError, "index requires an array", token)
-                    idx_val = self._eval_token_expr(tt_children[1:-1])
-                    if not isinstance(idx_val, int):
-                        raise self._error(ClownRuntimeError, "index must be an integer", token)
-                    if idx_val < 0 or idx_val >= len(obj):
-                        raise self._error(ClownRuntimeError, f"index {idx_val} out of bounds for array of length {len(obj)}", token)
-                    result = obj[idx_val]
-                else:
-                    args = self._eval_token_tree_args(next_token)
-                    tok_name = self._node_text(token)
-                    if tok_name == "Some":
-                        if len(args) != 1:
-                            raise self._error(ClownRuntimeError, "Some() expects 1 argument", token)
-                        result = OptionSome(args[0])
-                    else:
-                        func_def = self.functions.get(tok_name)
-                        if not func_def:
-                            raise self._error(
-                                ClownNameError,
-                                f"cannot find value `{tok_name}` in this scope",
-                                token,
-                            )
-                        result = self.call_func(func_def, args, token)
-            else:
-                ident_name = self._node_text(token)
-                if ident_name == "None":
-                    result = OPTION_NONE
-                else:
-                    result = self._get_identifier(ident_name)
-            return self._parse_postfix(stream, result, token)
-        if token.type == "token_tree":
-            return self._eval_token_tree_expr(token)
-        if token.type == "(":
-            value = self._parse_expression(stream, 0)
-            closing = stream.next()
-            if not closing or closing.type != ")":
-                raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
-            return value
-        raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
-
-    def _parse_postfix(
-        self, stream: _TokenStream, obj: Value, token: Node
-    ) -> Value:
-        while True:
-            next_token = stream.peek()
-            if not next_token or next_token.type != ".":
-                break
-            stream.next()
-            method_token = stream.next()
-            if not method_token:
-                raise self._error(
-                    ClownRuntimeError, "println! expects valid arguments", token
-                )
-            method_name = self._node_text(method_token)
-            arg_tree = stream.peek()
-            method_args: list[Value] = []
-            if arg_tree and arg_tree.type == "token_tree":
-                stream.next()
-                method_args = self._eval_token_tree_args(arg_tree)
-            if isinstance(obj, StructInstance):
-                if not method_args and method_name in obj.fields:
-                    obj = obj.fields[method_name]
-                    continue
-                method_table = self.methods.get(obj.type_name, {})
-                func_def = method_table.get(method_name)
-                if func_def:
-                    obj = self._call_struct_method(
-                        func_def, obj, method_args, token
-                    )
-                    continue
-            if isinstance(obj, (OptionSome, _OptionNone)):
-                obj = self._call_option_method(
-                    obj, method_name, method_args, token
-                )
-                continue
-            if isinstance(obj, list):
-                if method_name == "len":
-                    obj = len(obj)
-                    continue
-                if method_name == "push":
-                    obj.append(method_args[0] if method_args else None)
-                    obj = None  # type: ignore[assignment]
-                    continue
-                if method_name == "pop":
-                    obj = obj.pop() if obj else None
-                    continue
-            obj = self._call_math(method_name, [obj] + method_args, token)
-        return obj
-
-    def _eval_token_tree_expr(self, token_tree: Node) -> Value:
-        children = token_tree.children
-        if not children:
-            raise self._error(ClownRuntimeError, "println! expects valid arguments", token_tree)
-        if children[0].type == "(" and children[-1].type == ")":
-            inner = children[1:-1]
-        else:
-            inner = children
-        return self._eval_token_expr(inner)
-
-    def _eval_token_tree_args(self, token_tree: Node) -> list[Value]:
-        chunks = self._split_args(token_tree.children)
-        return [self._eval_token_expr(chunk) for chunk in chunks]
-
-
-class _TokenStream:
-    def __init__(self, tokens: list[Node]) -> None:
-        self.tokens = tokens
-        self.index = 0
-
-    def peek(self):
-        if self.index >= len(self.tokens):
-            return None
-        return self.tokens[self.index]
-
-    def next(self):
-        if self.index >= len(self.tokens):
-            return None
-        token = self.tokens[self.index]
-        self.index += 1
-        return token
-
-    def at_end(self) -> bool:
-        return self.index >= len(self.tokens)
-
-
-_BINARY_PRECEDENCE = {
-    "||": 1,
-    "&&": 2,
-    "==": 3,
-    "!=": 3,
-    "<": 4,
-    ">": 4,
-    "<=": 4,
-    ">=": 4,
-    "+": 5,
-    "-": 5,
-    "*": 6,
-    "/": 6,
-    "%": 6,
-}
-
-_UNARY_OPERATORS = {"-", "!"}
 
 _MATH_METHODS: dict[str, Callable[..., float]] = {
     "sqrt": math.sqrt,
