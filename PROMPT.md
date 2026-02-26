@@ -59,22 +59,14 @@ Comments below show expected output. "→ ErrorName" means non-zero exit with th
 
 ### Bouncer (reject unsupported syntax)
 
-```rust
-// bouncer_struct.rs → OutOfDepthError
-struct MyStruct {}
+Structs, `impl` blocks, and `use` declarations are now supported. The bouncer still rejects enums and traits.
 
+```rust
 // bouncer_enum.rs → OutOfDepthError
 enum Color { Red, Green, Blue }
 
 // bouncer_trait.rs → OutOfDepthError
 trait Printable { fn print(&self); }
-
-// bouncer_use.rs → OutOfDepthError
-use std::io;
-fn main() {}
-
-// bouncer_impl.rs → OutOfDepthError
-impl Foo { fn new() -> Foo { Foo } }
 ```
 
 ### Arithmetic, literals, `println!`
@@ -445,5 +437,197 @@ fn main() {
     let a = [1, 2, 3];
     let b = a;
     println!("{}", a[0]);
+}
+```
+
+### Constants and compound assignment
+
+`const` declarations are evaluated at top level and accessible from all functions. Compound assignment operators (`+=`, `-=`, `*=`, `/=`, `%=`) work on mutable variables.
+
+```rust
+// const_basic.rs → "100" then "3.14"
+const MAX: i64 = 100;
+const PI: f64 = 3.14;
+fn main() {
+    println!("{}", MAX);
+    println!("{}", PI);
+}
+
+// compound_assign.rs → "15" then "12" then "24" then "4" then "1" then "2"
+fn main() {
+    let mut x: i64 = 10;
+    x += 5;
+    println!("{}", x);
+    x -= 3;
+    println!("{}", x);
+    x *= 2;
+    println!("{}", x);
+    x /= 6;
+    println!("{}", x);
+    x %= 3;
+    println!("{}", x);
+    let mut y: f64 = 1.5;
+    y += 0.5;
+    println!("{}", y);
+}
+```
+
+### Match expressions
+
+`match` on integers, strings, booleans. Supports wildcard `_`, or-patterns `1 | 2`, and `match` as an expression. No enum destructuring.
+
+```rust
+// match_basic.rs → "three"
+fn main() {
+    let x = 3;
+    match x {
+        1 => println!("one"),
+        2 => println!("two"),
+        3 => println!("three"),
+        _ => println!("other"),
+    }
+}
+
+// match_string.rs → "great"
+fn main() {
+    let lang = "rust";
+    let rating = match lang {
+        "rust" => "great",
+        "python" => "good",
+        _ => "ok",
+    };
+    println!("{}", rating);
+}
+
+// match_or_pattern.rs → "small"
+fn main() {
+    let x = 2;
+    let result = match x {
+        1 | 2 => "small",
+        3 | 4 => "medium",
+        _ => "large",
+    };
+    println!("{}", result);
+}
+
+// match_expr.rs → "zero" then "one" then "many" then "many" then "many"
+fn main() {
+    for i in 0..5 {
+        let label = match i {
+            0 => "zero",
+            1 => "one",
+            _ => "many",
+        };
+        println!("{}", label);
+    }
+}
+```
+
+### Structs and methods
+
+Struct definitions, construction (with field initializers and shorthand), field access, and inherent `impl` blocks with methods. Associated functions (no `self` receiver) are called via `Type::method()`. Struct instances use move semantics.
+
+```rust
+// struct_basic.rs → "1.5" then "2.5"
+struct Point {
+    x: f64,
+    y: f64,
+}
+fn main() {
+    let p = Point { x: 1.5, y: 2.5 };
+    println!("{}", p.x);
+    println!("{}", p.y);
+}
+
+// struct_method.rs → "12" then "14"
+struct Rect {
+    w: f64,
+    h: f64,
+}
+impl Rect {
+    fn new(w: f64, h: f64) -> Rect {
+        Rect { w: w, h: h }
+    }
+    fn area(&self) -> f64 {
+        self.w * self.h
+    }
+    fn perimeter(&self) -> f64 {
+        2.0 * (self.w + self.h)
+    }
+}
+fn main() {
+    let r = Rect::new(3.0, 4.0);
+    println!("{}", r.area());
+    println!("{}", r.perimeter());
+}
+
+// struct_mut.rs → "0" then "42"
+struct Counter {
+    value: i64,
+}
+impl Counter {
+    fn new() -> Counter {
+        Counter { value: 0 }
+    }
+}
+fn main() {
+    let mut c = Counter::new();
+    println!("{}", c.value);
+    c.value = 42;
+    println!("{}", c.value);
+}
+
+// struct_move.rs → ClownMoveError
+struct Data {
+    value: i64,
+}
+fn main() {
+    let a = Data { value: 10 };
+    let b = a;
+    println!("{}", b.value);
+    println!("{}", a.value);
+}
+```
+
+### Option type
+
+Built-in `Option<T>` with `Some(x)` and `None`. Methods: `.unwrap()`, `.unwrap_or(default)`, `.is_some()`, `.is_none()`. The `?` operator propagates `None` via early return.
+
+```rust
+// option_basic.rs → "42" then "true" then "false" then "false" then "true" then "99"
+fn main() {
+    let a = Some(42);
+    let b: Option<i64> = None;
+    println!("{}", a.unwrap());
+    println!("{}", a.is_some());
+    println!("{}", a.is_none());
+    println!("{}", b.is_some());
+    println!("{}", b.is_none());
+    println!("{}", b.unwrap_or(99));
+}
+
+// option_question_mark.rs → "14" then "true" then "true"
+fn double_if_positive(x: i64) -> Option<i64> {
+    if x <= 0 {
+        return None;
+    }
+    Some(x * 2)
+}
+fn add_doubled(a: i64, b: i64) -> Option<i64> {
+    let da = double_if_positive(a)?;
+    let db = double_if_positive(b)?;
+    Some(da + db)
+}
+fn main() {
+    println!("{}", add_doubled(3, 4).unwrap());
+    println!("{}", add_doubled(-1, 4).is_none());
+    println!("{}", add_doubled(3, -2).is_none());
+}
+
+// option_unwrap_panic.rs → ClownRuntimeError
+fn main() {
+    let x: Option<i64> = None;
+    let v = x.unwrap();
+    println!("{}", v);
 }
 ```

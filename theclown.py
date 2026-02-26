@@ -71,7 +71,31 @@ class _Tombstone:
     pass
 
 
-Value = int | float | bool | str | list | tuple | range | None | _Tombstone
+@dataclass
+class StructInstance:
+    type_name: str
+    fields: dict[str, Any]
+
+
+class _OptionNone:
+    def __repr__(self) -> str:
+        return "None"
+
+
+@dataclass
+class OptionSome:
+    value: Any
+
+    def __repr__(self) -> str:
+        return f"Some({self.value!r})"
+
+
+OPTION_NONE = _OptionNone()
+
+Value = (
+    int | float | bool | str | list | tuple | range
+    | StructInstance | OptionSome | _OptionNone | None | _Tombstone
+)
 TOMBSTONE = _Tombstone()
 
 
@@ -79,6 +103,7 @@ TOMBSTONE = _Tombstone()
 class FunctionDef:
     params: list[tuple[str, bool]]
     body: Node
+    receiver: bool = False
 
 
 class Environment:
@@ -125,22 +150,32 @@ class Interpreter:
         self.stdout = stdout
         self.env = Environment()
         self.functions: dict[str, FunctionDef] = {}
+        self.constants: dict[str, Value] = {}
+        self.structs: dict[str, list[str]] = {}
+        self.methods: dict[str, dict[str, FunctionDef]] = {}
 
     def evaluate(self, node: Node) -> Value:
         match node.type:
             case "source_file":
+                _FIRST_PASS = ("function_item", "const_item", "struct_item", "impl_item")
                 for child in node.children:
                     if child.type == "function_item":
                         self._register_function(child)
+                    elif child.type == "const_item":
+                        self._register_const(child)
+                    elif child.type == "struct_item":
+                        self._register_struct(child)
+                    elif child.type == "impl_item":
+                        self._register_impl(child)
                 for child in node.children:
-                    if child.type != "function_item":
+                    if child.type not in _FIRST_PASS:
                         self.evaluate(child)
                 main_func = self.functions.get("main")
                 if main_func:
                     self.call_func(main_func, [])
                 return None
 
-            case "function_item":
+            case "function_item" | "const_item" | "struct_item" | "impl_item":
                 return None
 
             case "block":
@@ -270,14 +305,32 @@ class Interpreter:
             case "continue_expression":
                 raise ContinueSignal()
 
+            case "match_expression":
+                return self._eval_match(node)
+
+            case "try_expression":
+                inner = self.evaluate(self._require_child(node, 0))
+                if isinstance(inner, _OptionNone):
+                    raise ReturnSignal(OPTION_NONE)
+                if isinstance(inner, OptionSome):
+                    return inner.value
+                raise self._error(
+                    ClownRuntimeError,
+                    "the `?` operator can only be applied to Option values",
+                    node,
+                )
+
             case "macro_invocation":
                 return self._eval_macro(node)
 
             case "let_declaration":
                 return self._eval_let(node)
 
-            case "identifier":
-                return self._get_identifier(self._node_text(node))
+            case "identifier" | "self":
+                name = self._node_text(node)
+                if name == "None":
+                    return OPTION_NONE
+                return self._get_identifier(name)
 
             case "call_expression":
                 func_name = node.child_by_field_name("function")
@@ -292,11 +345,14 @@ class Interpreter:
                 if func_name.type == "field_expression":
                     return self._call_method(func_name, args, node)
                 if func_name.type == "scoped_identifier":
-                    method = self._node_text(
-                        func_name.children[-1]
-                    ) if func_name.children else self._node_text(func_name)
-                    return self._call_math(method, args, node)
+                    return self._call_scoped(func_name, args, node)
                 name = self._node_text(func_name)
+                if name == "Some":
+                    if len(args) != 1:
+                        raise self._error(
+                            ClownRuntimeError, "Some() expects 1 argument", node
+                        )
+                    return OptionSome(args[0])
                 func_def = self.functions.get(name)
                 if not func_def:
                     raise self._error(
@@ -318,27 +374,17 @@ class Interpreter:
             case "assignment_expression":
                 lhs = self._require_child(node, 0)
                 value = self.evaluate(self._require_child(node, 2))
-                if lhs.type == "index_expression":
-                    arr_name = self._node_text(lhs.children[0])
-                    idx = self.evaluate(lhs.children[2])
-                    obj, _ = self.env.get(arr_name)
-                    if not isinstance(obj, list):
-                        raise self._error(
-                            ClownRuntimeError, "index requires an array", node
-                        )
-                    if not isinstance(idx, int):
-                        raise self._error(
-                            ClownRuntimeError, "index must be an integer", node
-                        )
-                    if idx < 0 or idx >= len(obj):
-                        raise self._error(
-                            ClownRuntimeError,
-                            f"index {idx} out of bounds for array of length {len(obj)}",
-                            node,
-                        )
-                    obj[idx] = value
-                else:
-                    self.env.set(self._node_text(lhs), value)
+                self._assign_to(lhs, value, node)
+                return None
+
+            case "compound_assignment_expr":
+                lhs = self._require_child(node, 0)
+                op_text = self._node_text(self._require_child(node, 1))
+                base_op = op_text[:-1]  # "+=" -> "+"
+                rhs = self.evaluate(self._require_child(node, 2))
+                old = self._read_lhs(lhs, node)
+                new_val = self._apply_binary(base_op, old, rhs, node)
+                self._assign_to(lhs, new_val, node)
                 return None
 
             case "expression_statement":
@@ -379,11 +425,37 @@ class Interpreter:
                     )
                 return obj[idx]
 
+            case "struct_expression":
+                return self._eval_struct_expr(node)
+
+            case "field_expression":
+                obj = self.evaluate(node.children[0])
+                field_node = node.child_by_field_name("field")
+                if not field_node:
+                    raise self._error(ClownRuntimeError, "invalid field access", node)
+                field_name = self._node_text(field_node)
+                if isinstance(obj, StructInstance):
+                    if field_name not in obj.fields:
+                        raise self._error(
+                            ClownRuntimeError,
+                            f"no field `{field_name}` on type `{obj.type_name}`",
+                            node,
+                        )
+                    return obj.fields[field_name]
+                raise self._error(
+                    ClownRuntimeError, "field access on non-struct value", node
+                )
+
+            case "use_declaration":
+                return None
+
             case (
                 "line_comment"
                 | "primitive_type"
                 | "type_identifier"
                 | "mutable_specifier"
+                | "field_identifier"
+                | "generic_type"
             ):
                 return None
 
@@ -448,7 +520,97 @@ class Interpreter:
                         ClownRuntimeError, ".pop() on empty array", node
                     )
                 return obj.pop()
+        if isinstance(obj, StructInstance):
+            method_table = self.methods.get(obj.type_name, {})
+            func_def = method_table.get(method)
+            if func_def:
+                return self._call_struct_method(func_def, obj, args, node)
+        if isinstance(obj, (OptionSome, _OptionNone)):
+            return self._call_option_method(obj, method, args, node)
         return self._call_math(method, [obj] + args, node)
+
+    def _call_option_method(
+        self, obj: OptionSome | _OptionNone, method: str,
+        args: list[Value], node: Node,
+    ) -> Value:
+        match method:
+            case "unwrap":
+                if isinstance(obj, OptionSome):
+                    return obj.value
+                raise self._error(
+                    ClownRuntimeError,
+                    "called `Option::unwrap()` on a `None` value",
+                    node,
+                )
+            case "unwrap_or":
+                if len(args) != 1:
+                    raise self._error(
+                        ClownRuntimeError, ".unwrap_or() expects 1 argument", node
+                    )
+                if isinstance(obj, OptionSome):
+                    return obj.value
+                return args[0]
+            case "is_some":
+                return isinstance(obj, OptionSome)
+            case "is_none":
+                return isinstance(obj, _OptionNone)
+            case _:
+                raise self._error(
+                    OutOfDepthError,
+                    f"theclown doesn't understand Option method `{method}` yet",
+                    node,
+                )
+
+    def _call_scoped(
+        self, scoped_id: Node, args: list[Value], node: Node
+    ) -> Value:
+        parts = [
+            self._node_text(c) for c in scoped_id.children if c.type != "::"
+        ]
+        if len(parts) == 2:
+            type_name, method_name = parts
+            method_table = self.methods.get(type_name, {})
+            func_def = method_table.get(method_name)
+            if func_def:
+                if func_def.receiver:
+                    raise self._error(
+                        ClownRuntimeError,
+                        f"`{type_name}::{method_name}` requires a receiver",
+                        node,
+                    )
+                return self.call_func(func_def, args, node)
+        method = self._node_text(
+            scoped_id.children[-1]
+        ) if scoped_id.children else self._node_text(scoped_id)
+        return self._call_math(method, args, node)
+
+    def _call_struct_method(
+        self,
+        func_def: FunctionDef,
+        receiver: StructInstance,
+        args: list[Value],
+        node: Node,
+    ) -> Value:
+        if func_def.receiver:
+            previous_env = self.env
+            self.env = Environment()
+            try:
+                self.env.define("self", receiver, mutable=True)
+                if len(args) != len(func_def.params):
+                    raise self._error(
+                        ClownRuntimeError,
+                        f"method expects {len(func_def.params)} arguments, got {len(args)}",
+                        node,
+                    )
+                for (pname, mutable), arg in zip(func_def.params, args):
+                    self.env.define(pname, arg, mutable)
+                try:
+                    return self.evaluate(func_def.body)
+                except ReturnSignal as e:
+                    return e.value
+            finally:
+                self.env = previous_env
+        return self.call_func(func_def, args, node)
 
     def _call_math(
         self, method: str, args: list[Value], node: Node
@@ -484,6 +646,68 @@ class Interpreter:
         body = node.child_by_field_name("body")
         if body:
             self.functions[name] = FunctionDef(params=params, body=body)
+
+    def _register_struct(self, node: Node) -> None:
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            return
+        name = self._node_text(name_node)
+        fields: list[str] = []
+        body = node.child_by_field_name("body")
+        if body:
+            for child in body.children:
+                if child.type == "field_declaration":
+                    fname = child.child_by_field_name("name")
+                    if fname:
+                        fields.append(self._node_text(fname))
+        self.structs[name] = fields
+
+    def _register_impl(self, node: Node) -> None:
+        type_node = node.child_by_field_name("type")
+        if not type_node:
+            return
+        type_name = self._node_text(type_node)
+        body = node.child_by_field_name("body")
+        if not body:
+            return
+        if type_name not in self.methods:
+            self.methods[type_name] = {}
+        for child in body.children:
+            if child.type == "function_item":
+                fn_name_node = child.child_by_field_name("name")
+                if not fn_name_node:
+                    continue
+                fn_name = self._node_text(fn_name_node)
+                params_node = child.child_by_field_name("parameters")
+                params: list[tuple[str, bool]] = []
+                has_receiver = False
+                if params_node:
+                    for param in params_node.children:
+                        if param.type == "self_parameter":
+                            has_receiver = True
+                            continue
+                        if param.type == "parameter":
+                            param_name = param.child_by_field_name("pattern")
+                            if param_name:
+                                mutable = any(
+                                    c.type == "mutable_specifier"
+                                    for c in param.children
+                                )
+                                params.append((self._node_text(param_name), mutable))
+                fn_body = child.child_by_field_name("body")
+                if fn_body:
+                    self.methods[type_name][fn_name] = FunctionDef(
+                        params=params, body=fn_body, receiver=has_receiver
+                    )
+
+    def _register_const(self, node: Node) -> None:
+        name_node = node.child_by_field_name("name")
+        value_node = node.child_by_field_name("value")
+        if not name_node or not value_node:
+            return
+        name = self._node_text(name_node)
+        value = self.evaluate(value_node)
+        self.constants[name] = value
 
     def _string_value(self, node: Node) -> str:
         for child in node.children:
@@ -549,13 +773,27 @@ class Interpreter:
         if isinstance(value, list):
             inner = ", ".join(self._rust_repr(v) for v in value)
             return f"[{inner}]"
+        if isinstance(value, StructInstance):
+            fields = ", ".join(
+                f"{k}: {self._rust_repr(v)}" for k, v in value.fields.items()
+            )
+            return f"{value.type_name} {{ {fields} }}"
+        if isinstance(value, OptionSome):
+            return f"Some({self._rust_repr(value.value)})"
+        if isinstance(value, _OptionNone):
+            return "None"
         return str(value)
 
     def _is_copy_type(self, value: Value) -> bool:
         return isinstance(value, (int, float, bool)) or value is None
 
     def _get_identifier(self, name: str) -> Value:
-        value, _ = self.env.get(name)
+        try:
+            value, _ = self.env.get(name)
+        except ClownNameError:
+            if name in self.constants:
+                return self.constants[name]
+            raise
         if value is TOMBSTONE:
             raise ClownMoveError(f"use of moved value: `{name}`")
         return value
@@ -631,6 +869,201 @@ class Interpreter:
                     node,
                 )
 
+    def _eval_struct_expr(self, node: Node) -> Value:
+        name_node = node.child_by_field_name("name")
+        if not name_node:
+            raise self._error(ClownRuntimeError, "invalid struct expression", node)
+        type_name = self._node_text(name_node)
+        if type_name not in self.structs:
+            raise self._error(
+                ClownNameError, f"cannot find struct `{type_name}`", node
+            )
+        body = node.child_by_field_name("body")
+        fields: dict[str, Value] = {}
+        if body:
+            for child in body.children:
+                if child.type == "field_initializer":
+                    fname_node = child.child_by_field_name("field")
+                    val_node = child.child_by_field_name("value")
+                    if fname_node and val_node:
+                        fields[self._node_text(fname_node)] = self.evaluate(val_node)
+                elif child.type == "shorthand_field_initializer":
+                    fname = self._node_text(child).strip()
+                    fields[fname] = self._get_identifier(fname)
+        return StructInstance(type_name=type_name, fields=fields)
+
+    def _eval_match(self, node: Node) -> Value:
+        scrutinee_node = node.child_by_field_name("value")
+        if not scrutinee_node:
+            scrutinee_node = node.child(1)
+        if not scrutinee_node:
+            raise self._error(ClownRuntimeError, "invalid match expression", node)
+        scrutinee = self.evaluate(scrutinee_node)
+
+        match_body = node.child_by_field_name("body")
+        if not match_body:
+            raise self._error(ClownRuntimeError, "invalid match expression", node)
+
+        for child in match_body.children:
+            if child.type != "match_arm":
+                continue
+            pattern_node = next(
+                (c for c in child.children if c.type == "match_pattern"), None
+            )
+            body_node = None
+            past_arrow = False
+            for c in child.children:
+                if c.type == "=>":
+                    past_arrow = True
+                    continue
+                if past_arrow and c.type not in (",",):
+                    body_node = c
+                    break
+            if not pattern_node or not body_node:
+                continue
+
+            bindings: dict[str, Value] = {}
+            if self._match_pattern(pattern_node, scrutinee, bindings):
+                self.env.push_scope()
+                try:
+                    for bname, bval in bindings.items():
+                        self.env.define(bname, bval, mutable=False)
+                    return self.evaluate(body_node)
+                finally:
+                    self.env.pop_scope()
+
+        raise self._error(
+            ClownRuntimeError, "non-exhaustive match expression", node
+        )
+
+    def _match_pattern(
+        self, pattern: Node, value: Value, bindings: dict[str, Value]
+    ) -> bool:
+        children = [
+            c for c in pattern.children
+            if c.type not in ("(", ")", ",", "|")
+        ]
+
+        if any(c.type == "|" for c in pattern.children):
+            alternatives: list[list[Node]] = []
+            current: list[Node] = []
+            for c in pattern.children:
+                if c.type == "|":
+                    if current:
+                        alternatives.append(current)
+                        current = []
+                else:
+                    current.append(c)
+            if current:
+                alternatives.append(current)
+            for alt in alternatives:
+                if len(alt) == 1 and self._match_single(alt[0], value, bindings):
+                    return True
+            return False
+
+        if len(children) == 1:
+            return self._match_single(children[0], value, bindings)
+
+        if isinstance(value, tuple) and len(children) == len(value):
+            for child, elem in zip(children, value):
+                if not self._match_single(child, elem, bindings):
+                    return False
+            return True
+
+        return False
+
+    def _match_single(
+        self, node: Node, value: Value, bindings: dict[str, Value]
+    ) -> bool:
+        if node.type == "_":
+            return True
+        if node.type == "integer_literal":
+            return value == int(self._node_text(node))
+        if node.type == "float_literal":
+            return value == float(self._node_text(node))
+        if node.type == "boolean_literal":
+            return value == (self._node_text(node) == "true")
+        if node.type == "string_literal":
+            return value == self._string_value(node)
+        if node.type == "negative_literal":
+            inner = node.children[-1] if node.children else node
+            if inner.type == "integer_literal":
+                return value == -int(self._node_text(inner))
+            if inner.type == "float_literal":
+                return value == -float(self._node_text(inner))
+        if node.type == "or_pattern":
+            for child in node.children:
+                if child.type != "|" and self._match_single(child, value, bindings):
+                    return True
+            return False
+        if node.type == "tuple_pattern":
+            elems = [c for c in node.children if c.type not in ("(", ")", ",")]
+            if isinstance(value, tuple) and len(elems) == len(value):
+                for child, elem in zip(elems, value):
+                    if not self._match_single(child, elem, bindings):
+                        return False
+                return True
+            return False
+        if node.type == "identifier":
+            bindings[self._node_text(node)] = value
+            return True
+        if node.type == "match_pattern":
+            return self._match_pattern(node, value, bindings)
+        return False
+
+    def _assign_to(self, lhs: Node, value: Value, node: Node) -> None:
+        if lhs.type == "index_expression":
+            arr_name = self._node_text(lhs.children[0])
+            idx = self.evaluate(lhs.children[2])
+            obj, _ = self.env.get(arr_name)
+            if not isinstance(obj, list):
+                raise self._error(ClownRuntimeError, "index requires an array", node)
+            if not isinstance(idx, int):
+                raise self._error(ClownRuntimeError, "index must be an integer", node)
+            if idx < 0 or idx >= len(obj):
+                raise self._error(
+                    ClownRuntimeError,
+                    f"index {idx} out of bounds for array of length {len(obj)}",
+                    node,
+                )
+            obj[idx] = value
+        elif lhs.type == "field_expression":
+            obj = self.evaluate(lhs.children[0])
+            field_node = lhs.child_by_field_name("field")
+            if not field_node or not isinstance(obj, StructInstance):
+                raise self._error(
+                    ClownRuntimeError, "field assignment on non-struct", node
+                )
+            fname = self._node_text(field_node)
+            if fname not in obj.fields:
+                raise self._error(
+                    ClownRuntimeError,
+                    f"no field `{fname}` on type `{obj.type_name}`",
+                    node,
+                )
+            obj.fields[fname] = value
+        else:
+            self.env.set(self._node_text(lhs), value)
+
+    def _read_lhs(self, lhs: Node, node: Node) -> Value:
+        if lhs.type == "index_expression":
+            obj = self.evaluate(lhs.children[0])
+            idx = self.evaluate(lhs.children[2])
+            if not isinstance(obj, list):
+                raise self._error(ClownRuntimeError, "index requires an array", node)
+            if not isinstance(idx, int):
+                raise self._error(ClownRuntimeError, "index must be an integer", node)
+            if idx < 0 or idx >= len(obj):
+                raise self._error(
+                    ClownRuntimeError,
+                    f"index {idx} out of bounds for array of length {len(obj)}",
+                    node,
+                )
+            return obj[idx]
+        if lhs.type == "field_expression":
+            return self.evaluate(lhs)
+        return self._get_identifier(self._node_text(lhs))
+
     def _eval_let(self, node: Node) -> None:
         pattern = node.child_by_field_name("pattern")
         if not pattern:
@@ -658,7 +1091,10 @@ class Interpreter:
         name = self._node_text(pattern)
         value: Value = None
         if value_node:
-            if value_node.type == "identifier":
+            if (
+                value_node.type == "identifier"
+                and self._node_text(value_node) != "None"
+            ):
                 src_name = self._node_text(value_node)
                 src_value, _ = self.env.get(src_name)
                 if not self._is_copy_type(src_value):
@@ -800,28 +1236,8 @@ class Interpreter:
         if token.type == "string_literal":
             return self._string_value(token)
         if token.type == "identifier":
+            result: Value
             next_token = stream.peek()
-            if next_token and next_token.type == ".":
-                stream.next()
-                method_token = stream.next()
-                if not method_token:
-                    raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
-                method_name = self._node_text(method_token)
-                arg_tree = stream.peek()
-                method_args: list[Value] = []
-                if arg_tree and arg_tree.type == "token_tree":
-                    stream.next()
-                    method_args = self._eval_token_tree_args(arg_tree)
-                obj = self._get_identifier(self._node_text(token))
-                if isinstance(obj, list):
-                    if method_name == "len":
-                        return len(obj)
-                    if method_name == "push":
-                        obj.append(method_args[0] if method_args else None)
-                        return None
-                    if method_name == "pop":
-                        return obj.pop() if obj else None
-                return self._call_math(method_name, [obj] + method_args, token)
             if next_token and next_token.type == "token_tree":
                 stream.next()
                 tt_children = next_token.children
@@ -834,17 +1250,30 @@ class Interpreter:
                         raise self._error(ClownRuntimeError, "index must be an integer", token)
                     if idx_val < 0 or idx_val >= len(obj):
                         raise self._error(ClownRuntimeError, f"index {idx_val} out of bounds for array of length {len(obj)}", token)
-                    return obj[idx_val]
-                args = self._eval_token_tree_args(next_token)
-                func_def = self.functions.get(self._node_text(token))
-                if not func_def:
-                    raise self._error(
-                        ClownNameError,
-                        f"cannot find value `{self._node_text(token)}` in this scope",
-                        token,
-                    )
-                return self.call_func(func_def, args, token)
-            return self._get_identifier(self._node_text(token))
+                    result = obj[idx_val]
+                else:
+                    args = self._eval_token_tree_args(next_token)
+                    tok_name = self._node_text(token)
+                    if tok_name == "Some":
+                        if len(args) != 1:
+                            raise self._error(ClownRuntimeError, "Some() expects 1 argument", token)
+                        result = OptionSome(args[0])
+                    else:
+                        func_def = self.functions.get(tok_name)
+                        if not func_def:
+                            raise self._error(
+                                ClownNameError,
+                                f"cannot find value `{tok_name}` in this scope",
+                                token,
+                            )
+                        result = self.call_func(func_def, args, token)
+            else:
+                ident_name = self._node_text(token)
+                if ident_name == "None":
+                    result = OPTION_NONE
+                else:
+                    result = self._get_identifier(ident_name)
+            return self._parse_postfix(stream, result, token)
         if token.type == "token_tree":
             return self._eval_token_tree_expr(token)
         if token.type == "(":
@@ -854,6 +1283,55 @@ class Interpreter:
                 raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
             return value
         raise self._error(ClownRuntimeError, "println! expects valid arguments", token)
+
+    def _parse_postfix(
+        self, stream: _TokenStream, obj: Value, token: Node
+    ) -> Value:
+        while True:
+            next_token = stream.peek()
+            if not next_token or next_token.type != ".":
+                break
+            stream.next()
+            method_token = stream.next()
+            if not method_token:
+                raise self._error(
+                    ClownRuntimeError, "println! expects valid arguments", token
+                )
+            method_name = self._node_text(method_token)
+            arg_tree = stream.peek()
+            method_args: list[Value] = []
+            if arg_tree and arg_tree.type == "token_tree":
+                stream.next()
+                method_args = self._eval_token_tree_args(arg_tree)
+            if isinstance(obj, StructInstance):
+                if not method_args and method_name in obj.fields:
+                    obj = obj.fields[method_name]
+                    continue
+                method_table = self.methods.get(obj.type_name, {})
+                func_def = method_table.get(method_name)
+                if func_def:
+                    obj = self._call_struct_method(
+                        func_def, obj, method_args, token
+                    )
+                    continue
+            if isinstance(obj, (OptionSome, _OptionNone)):
+                obj = self._call_option_method(
+                    obj, method_name, method_args, token
+                )
+                continue
+            if isinstance(obj, list):
+                if method_name == "len":
+                    obj = len(obj)
+                    continue
+                if method_name == "push":
+                    obj.append(method_args[0] if method_args else None)
+                    obj = None  # type: ignore[assignment]
+                    continue
+                if method_name == "pop":
+                    obj = obj.pop() if obj else None
+                    continue
+            obj = self._call_math(method_name, [obj] + method_args, token)
+        return obj
 
     def _eval_token_tree_expr(self, token_tree: Node) -> Value:
         children = token_tree.children
