@@ -5,12 +5,12 @@ from __future__ import annotations
 import math
 import re
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, TextIO, cast
+from typing import Any, TextIO, cast
 
-from tree_sitter import Language, Parser, Node
 import tree_sitter_rust
-
+from tree_sitter import Language, Node, Parser
 
 RUST = Language(tree_sitter_rust.language())
 TREE_PARSER = Parser(RUST)
@@ -100,8 +100,19 @@ class OptionSome:
 OPTION_NONE = _OptionNone()
 
 Value = (
-    int | float | bool | str | list | tuple | range
-    | StructInstance | EnumVariant | OptionSome | _OptionNone | None | _Tombstone
+    int
+    | float
+    | bool
+    | str
+    | list
+    | tuple
+    | range
+    | StructInstance
+    | EnumVariant
+    | OptionSome
+    | _OptionNone
+    | None
+    | _Tombstone
 )
 TOMBSTONE = _Tombstone()
 
@@ -165,7 +176,13 @@ class Interpreter:
     def evaluate(self, node: Node) -> Value:
         match node.type:
             case "source_file":
-                _FIRST_PASS = ("function_item", "const_item", "struct_item", "enum_item", "impl_item")
+                _FIRST_PASS = (
+                    "function_item",
+                    "const_item",
+                    "struct_item",
+                    "enum_item",
+                    "impl_item",
+                )
                 for child in node.children:
                     if child.type == "function_item":
                         self._register_function(child)
@@ -185,7 +202,13 @@ class Interpreter:
                     self.call_func(main_func, [])
                 return None
 
-            case "function_item" | "const_item" | "struct_item" | "enum_item" | "impl_item":
+            case (
+                "function_item"
+                | "const_item"
+                | "struct_item"
+                | "enum_item"
+                | "impl_item"
+            ):
                 return None
 
             case "block":
@@ -195,9 +218,12 @@ class Interpreter:
                     children = [c for c in node.children if c.type not in ("{", "}")]
                     for child in children:
                         result = self.evaluate(child)
-                    if children and children[-1].type == "expression_statement":
-                        if any(c.type == ";" for c in children[-1].children):
-                            return None
+                    if (
+                        children
+                        and children[-1].type == "expression_statement"
+                        and any(c.type == ";" for c in children[-1].children)
+                    ):
+                        return None
                     return result
                 finally:
                     self.env.pop_scope()
@@ -240,7 +266,9 @@ class Interpreter:
 
             case "parenthesized_expression":
                 if len(node.children) < 2:
-                    raise self._error(ClownRuntimeError, "invalid parenthesized expression", node)
+                    raise self._error(
+                        ClownRuntimeError, "invalid parenthesized expression", node
+                    )
                 return self.evaluate(node.children[1])
 
             case "if_expression":
@@ -265,7 +293,9 @@ class Interpreter:
             case "while_expression":
                 condition_node = node.child_by_field_name("condition")
                 if not condition_node:
-                    raise self._error(ClownRuntimeError, "invalid while expression", node)
+                    raise self._error(
+                        ClownRuntimeError, "invalid while expression", node
+                    )
                 body = node.child_by_field_name("body")
                 try:
                     while self.evaluate(condition_node):
@@ -284,7 +314,9 @@ class Interpreter:
             case "loop_expression":
                 body = node.child_by_field_name("body")
                 if not body:
-                    raise self._error(ClownRuntimeError, "invalid loop expression", node)
+                    raise self._error(
+                        ClownRuntimeError, "invalid loop expression", node
+                    )
                 try:
                     while True:
                         try:
@@ -298,7 +330,9 @@ class Interpreter:
             case "range_expression":
                 children = [c for c in node.children if c.type not in ("..", "..=")]
                 if len(children) != 2:
-                    raise self._error(ClownRuntimeError, "invalid range expression", node)
+                    raise self._error(
+                        ClownRuntimeError, "invalid range expression", node
+                    )
                 start = self.evaluate(children[0])
                 end = self.evaluate(children[1])
                 inclusive = any(c.type == "..=" for c in node.children)
@@ -345,7 +379,9 @@ class Interpreter:
             case "call_expression":
                 func_name = node.child_by_field_name("function")
                 if not func_name:
-                    raise self._error(ClownRuntimeError, "invalid call expression", node)
+                    raise self._error(
+                        ClownRuntimeError, "invalid call expression", node
+                    )
                 args_node = node.child_by_field_name("arguments")
                 args: list[Value] = []
                 if args_node:
@@ -440,12 +476,16 @@ class Interpreter:
                 if len(parts) == 2:
                     type_name, variant = parts
                     enum_def = self.enums.get(type_name)
-                    if enum_def is not None and variant in enum_def:
-                        if enum_def[variant] == 0:
-                            return EnumVariant(type_name, variant, ())
+                    if (
+                        enum_def is not None
+                        and variant in enum_def
+                        and enum_def[variant] == 0
+                    ):
+                        return EnumVariant(type_name, variant, ())
+                scoped = "::".join(parts)
                 raise self._error(
                     OutOfDepthError,
-                    f"theclown doesn't understand scoped identifier `{'::'.join(parts)}` yet",
+                    f"theclown doesn't understand scoped identifier `{scoped}` yet",
                     node,
                 )
 
@@ -488,7 +528,9 @@ class Interpreter:
                 for child in node.children:
                     if child.type not in ("&", "mutable_specifier"):
                         return self.evaluate(child)
-                raise self._error(ClownRuntimeError, "invalid reference expression", node)
+                raise self._error(
+                    ClownRuntimeError, "invalid reference expression", node
+                )
 
             case "ERROR":
                 line = node.start_point[0] + 1
@@ -510,14 +552,17 @@ class Interpreter:
         self, func_def: FunctionDef, args: list[Value], node: Node | None = None
     ) -> Value:
         if len(args) != len(func_def.params):
-            raise self._error(ClownRuntimeError, 
+            raise self._error(
+                ClownRuntimeError,
                 f"function expects {len(func_def.params)} arguments, got {len(args)}",
                 node,
             )
         previous_env = self.env
         self.env = Environment()
         try:
-            for (param_name, mutable), arg_value in zip(func_def.params, args):
+            for (param_name, mutable), arg_value in zip(
+                func_def.params, args, strict=True
+            ):
                 self.env.define(param_name, arg_value, mutable)
             try:
                 return self.evaluate(func_def.body)
@@ -526,9 +571,7 @@ class Interpreter:
         finally:
             self.env = previous_env
 
-    def _call_method(
-        self, field_expr: Node, args: list[Value], node: Node
-    ) -> Value:
+    def _call_method(self, field_expr: Node, args: list[Value], node: Node) -> Value:
         obj_node = field_expr.children[0] if field_expr.children else None
         method_node = field_expr.child_by_field_name("field")
         if not obj_node or not method_node:
@@ -547,9 +590,7 @@ class Interpreter:
                 return None
             if method == "pop":
                 if not obj:
-                    raise self._error(
-                        ClownRuntimeError, ".pop() on empty array", node
-                    )
+                    raise self._error(ClownRuntimeError, ".pop() on empty array", node)
                 return obj.pop()
         if isinstance(obj, StructInstance):
             method_table = self.methods.get(obj.type_name, {})
@@ -558,11 +599,14 @@ class Interpreter:
                 return self._call_struct_method(func_def, obj, args, node)
         if isinstance(obj, (OptionSome, _OptionNone)):
             return self._call_option_method(obj, method, args, node)
-        return self._call_math(method, [obj] + args, node)
+        return self._call_math(method, [obj, *args], node)
 
     def _call_option_method(
-        self, obj: OptionSome | _OptionNone, method: str,
-        args: list[Value], node: Node,
+        self,
+        obj: OptionSome | _OptionNone,
+        method: str,
+        args: list[Value],
+        node: Node,
     ) -> Value:
         match method:
             case "unwrap":
@@ -592,12 +636,8 @@ class Interpreter:
                     node,
                 )
 
-    def _call_scoped(
-        self, scoped_id: Node, args: list[Value], node: Node
-    ) -> Value:
-        parts = [
-            self._node_text(c) for c in scoped_id.children if c.type != "::"
-        ]
+    def _call_scoped(self, scoped_id: Node, args: list[Value], node: Node) -> Value:
+        parts = [self._node_text(c) for c in scoped_id.children if c.type != "::"]
         if len(parts) == 2:
             type_name, method_name = parts
             method_table = self.methods.get(type_name, {})
@@ -616,13 +656,16 @@ class Interpreter:
                 if len(args) != expected:
                     raise self._error(
                         ClownRuntimeError,
-                        f"`{type_name}::{method_name}` expects {expected} fields, got {len(args)}",
+                        f"`{type_name}::{method_name}` expects"
+                        f" {expected} fields, got {len(args)}",
                         node,
                     )
                 return EnumVariant(type_name, method_name, tuple(args))
-        method = self._node_text(
-            scoped_id.children[-1]
-        ) if scoped_id.children else self._node_text(scoped_id)
+        method = (
+            self._node_text(scoped_id.children[-1])
+            if scoped_id.children
+            else self._node_text(scoped_id)
+        )
         return self._call_math(method, args, node)
 
     def _call_struct_method(
@@ -640,10 +683,11 @@ class Interpreter:
                 if len(args) != len(func_def.params):
                     raise self._error(
                         ClownRuntimeError,
-                        f"method expects {len(func_def.params)} arguments, got {len(args)}",
+                        f"method expects {len(func_def.params)} arguments,"
+                        f" got {len(args)}",
                         node,
                     )
-                for (pname, mutable), arg in zip(func_def.params, args):
+                for (pname, mutable), arg in zip(func_def.params, args, strict=True):
                     self.env.define(pname, arg, mutable)
                 try:
                     return self.evaluate(func_def.body)
@@ -653,9 +697,7 @@ class Interpreter:
                 self.env = previous_env
         return self.call_func(func_def, args, node)
 
-    def _call_math(
-        self, method: str, args: list[Value], node: Node
-    ) -> Value:
+    def _call_math(self, method: str, args: list[Value], node: Node) -> Value:
         fn = _MATH_METHODS.get(method)
         if not fn:
             raise self._error(
@@ -682,7 +724,9 @@ class Interpreter:
                 if param.type == "parameter":
                     param_name = param.child_by_field_name("pattern")
                     if param_name:
-                        mutable = any(c.type == "mutable_specifier" for c in param.children)
+                        mutable = any(
+                            c.type == "mutable_specifier" for c in param.children
+                        )
                         params.append((self._node_text(param_name), mutable))
         body = node.child_by_field_name("body")
         if body:
@@ -720,11 +764,20 @@ class Interpreter:
                         continue
                     vname = self._node_text(vname_node)
                     field_list = next(
-                        (c for c in child.children if c.type == "ordered_field_declaration_list"), None
+                        (
+                            c
+                            for c in child.children
+                            if c.type == "ordered_field_declaration_list"
+                        ),
+                        None,
                     )
                     arity = 0
                     if field_list:
-                        arity = sum(1 for c in field_list.children if c.type not in ("(", ")", ","))
+                        arity = sum(
+                            1
+                            for c in field_list.children
+                            if c.type not in ("(", ")", ",")
+                        )
                     variants[vname] = arity
         self.enums[name] = variants
 
@@ -892,6 +945,7 @@ class Interpreter:
                     raise self._error(ClownRuntimeError, "modulo by zero", node)
                 if isinstance(left, float) or isinstance(right, float):
                     import math
+
                     return math.fmod(lval, rval)
                 return lval - rval * int(lval / rval)
             case "==":
@@ -909,9 +963,7 @@ class Interpreter:
             case _:
                 raise self._error(OutOfDepthError, f"unknown operator: {op}", node)
 
-    def _apply_unary(
-        self, op: str, operand: Value, node: Node | None = None
-    ) -> Value:
+    def _apply_unary(self, op: str, operand: Value, node: Node | None = None) -> Value:
         oval = cast(Any, operand)
         match op:
             case "-":
@@ -929,7 +981,18 @@ class Interpreter:
         match target_type:
             case "f64" | "f32":
                 return float(value)  # type: ignore[arg-type]
-            case "i64" | "i32" | "i16" | "i8" | "u64" | "u32" | "u16" | "u8" | "isize" | "usize":
+            case (
+                "i64"
+                | "i32"
+                | "i16"
+                | "i8"
+                | "u64"
+                | "u32"
+                | "u16"
+                | "u8"
+                | "isize"
+                | "usize"
+            ):
                 return int(value)  # type: ignore[arg-type]
             case "bool":
                 return bool(value)
@@ -946,9 +1009,7 @@ class Interpreter:
             raise self._error(ClownRuntimeError, "invalid struct expression", node)
         type_name = self._node_text(name_node)
         if type_name not in self.structs:
-            raise self._error(
-                ClownNameError, f"cannot find struct `{type_name}`", node
-            )
+            raise self._error(ClownNameError, f"cannot find struct `{type_name}`", node)
         body = node.child_by_field_name("body")
         fields: dict[str, Value] = {}
         if body:
@@ -1003,17 +1064,12 @@ class Interpreter:
                 finally:
                     self.env.pop_scope()
 
-        raise self._error(
-            ClownRuntimeError, "non-exhaustive match expression", node
-        )
+        raise self._error(ClownRuntimeError, "non-exhaustive match expression", node)
 
     def _match_pattern(
         self, pattern: Node, value: Value, bindings: dict[str, Value]
     ) -> bool:
-        children = [
-            c for c in pattern.children
-            if c.type not in ("(", ")", ",", "|")
-        ]
+        children = [c for c in pattern.children if c.type not in ("(", ")", ",", "|")]
 
         if any(c.type == "|" for c in pattern.children):
             alternatives: list[list[Node]] = []
@@ -1036,7 +1092,7 @@ class Interpreter:
             return self._match_single(children[0], value, bindings)
 
         if isinstance(value, tuple) and len(children) == len(value):
-            for child, elem in zip(children, value):
+            for child, elem in zip(children, value, strict=True):
                 if not self._match_single(child, elem, bindings):
                     return False
             return True
@@ -1070,7 +1126,7 @@ class Interpreter:
         if node.type == "tuple_pattern":
             elems = [c for c in node.children if c.type not in ("(", ")", ",")]
             if isinstance(value, tuple) and len(elems) == len(value):
-                for child, elem in zip(elems, value):
+                for child, elem in zip(elems, value, strict=True):
                     if not self._match_single(child, elem, bindings):
                         return False
                 return True
@@ -1081,16 +1137,26 @@ class Interpreter:
                 return value.type_name == parts[0] and value.variant_name == parts[1]
             return False
         if node.type == "tuple_struct_pattern":
-            scoped = next((c for c in node.children if c.type == "scoped_identifier"), None)
+            scoped = next(
+                (c for c in node.children if c.type == "scoped_identifier"), None
+            )
             if not scoped or not isinstance(value, EnumVariant):
                 return False
             parts = [self._node_text(c) for c in scoped.children if c.type != "::"]
-            if len(parts) != 2 or value.type_name != parts[0] or value.variant_name != parts[1]:
+            if (
+                len(parts) != 2
+                or value.type_name != parts[0]
+                or value.variant_name != parts[1]
+            ):
                 return False
-            field_nodes = [c for c in node.children if c.type not in ("(", ")", ",", "scoped_identifier")]
+            field_nodes = [
+                c
+                for c in node.children
+                if c.type not in ("(", ")", ",", "scoped_identifier")
+            ]
             if len(field_nodes) != len(value.fields):
                 return False
-            for field_node, field_val in zip(field_nodes, value.fields):
+            for field_node, field_val in zip(field_nodes, value.fields, strict=True):
                 if not self._match_single(field_node, field_val, bindings):
                     return False
             return True
@@ -1163,16 +1229,18 @@ class Interpreter:
 
         if pattern.type == "tuple_pattern":
             names = [
-                self._node_text(c)
-                for c in pattern.children
-                if c.type == "identifier"
+                self._node_text(c) for c in pattern.children if c.type == "identifier"
             ]
             if not value_node:
-                raise self._error(ClownRuntimeError, "uninitialized let is not supported", node)
+                raise self._error(
+                    ClownRuntimeError, "uninitialized let is not supported", node
+                )
             value = self.evaluate(value_node)
             if not isinstance(value, tuple) or len(value) != len(names):
-                raise self._error(ClownRuntimeError, "tuple destructuring length mismatch", node)
-            for n, v in zip(names, value):
+                raise self._error(
+                    ClownRuntimeError, "tuple destructuring length mismatch", node
+                )
+            for n, v in zip(names, value, strict=True):
                 self.env.define(n, v, mutable)
             return None
 
@@ -1193,7 +1261,9 @@ class Interpreter:
             else:
                 value = self.evaluate(value_node)
         else:
-            raise self._error(ClownRuntimeError, "uninitialized let is not supported", node)
+            raise self._error(
+                ClownRuntimeError, "uninitialized let is not supported", node
+            )
         self.env.define(name, value, mutable)
         return None
 
@@ -1202,9 +1272,7 @@ class Interpreter:
         if not macro_name:
             return None
         name = self._node_text(macro_name)
-        token_tree = next(
-            (c for c in node.children if c.type == "token_tree"), None
-        )
+        token_tree = next((c for c in node.children if c.type == "token_tree"), None)
         if name == "vec":
             if not token_tree:
                 return []
@@ -1222,8 +1290,11 @@ class Interpreter:
             return None
         fmt_node = self._reparse_expr(arg_texts[0])
         if not fmt_node or fmt_node.type != "string_literal":
-            raise self._error(ClownRuntimeError,
-                "println! requires a format string as first argument", node)
+            raise self._error(
+                ClownRuntimeError,
+                "println! requires a format string as first argument",
+                node,
+            )
         format_str = self._string_value(fmt_node)
         expr_args = arg_texts[1:]
         kwargs = {
@@ -1234,8 +1305,7 @@ class Interpreter:
             print(format_str, file=self.stdout)
             return None
         values = [
-            self._rust_repr(self.evaluate(self._reparse_expr(t)))
-            for t in expr_args
+            self._rust_repr(self.evaluate(self._reparse_expr(t))) for t in expr_args
         ]
         try:
             output = format_str.format(*values, **kwargs)

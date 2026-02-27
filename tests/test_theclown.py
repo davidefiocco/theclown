@@ -1,6 +1,4 @@
 import subprocess
-import pytest
-
 
 THECLOWN = ["uv", "run", "python", "theclown.py"]
 
@@ -13,7 +11,8 @@ def run_theclown(rs_file, check=False):
     )
     if check and result.returncode != 0:
         raise AssertionError(
-            f"Expected success but got:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            f"Expected success but got:\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
     return result
 
@@ -240,7 +239,9 @@ def test_neg_div():
 def test_error_wrong_arity():
     result = run_theclown("tests/error_wrong_arity.rs")
     assert result.returncode != 0
-    assert "ClownRuntimeError" in result.stderr or "expects 2 arguments" in result.stderr
+    assert (
+        "ClownRuntimeError" in result.stderr or "expects 2 arguments" in result.stderr
+    )
 
 
 def test_for_range():
@@ -315,9 +316,21 @@ def test_lc_fizzbuzz():
     result = run_theclown("tests/lc_fizzbuzz.rs", check=True)
     lines = result.stdout.strip().split("\n")
     assert lines == [
-        "1", "2", "Fizz", "4", "Buzz",
-        "Fizz", "7", "8", "Fizz", "Buzz",
-        "11", "Fizz", "13", "14", "FizzBuzz",
+        "1",
+        "2",
+        "Fizz",
+        "4",
+        "Buzz",
+        "Fizz",
+        "7",
+        "8",
+        "Fizz",
+        "Buzz",
+        "11",
+        "Fizz",
+        "13",
+        "14",
+        "FizzBuzz",
     ]
 
 
