@@ -4,7 +4,7 @@ A toy/vibecoded Rust interpreter written in Python.
 
 Uses [tree-sitter-rust](https://github.com/tree-sitter/tree-sitter-rust) for parsing and Python's structural pattern matching (`match`/`case`) for AST walking. The interpreter runs a meaningful subset of Rust — enough for structs, match expressions, Option types, recursion, control flow, and move semantics — in a single-file interpreter.
 
-Named after kRusty the Clown. Inspired by pydantic's [monty](https://github.com/pydantic/monty), which compiles a Python subset using Rust. theclown goes the other way: it interprets Rust in Python 🤡.
+Named after kRusty the Clown. Vaguely inspired by pydantic's [monty](https://github.com/pydantic/monty), which compiles a Python subset using Rust. theclown goes the other way: it interprets Rust in Python 🤡.
 
 ## Quickstart
 
