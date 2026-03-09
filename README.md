@@ -58,12 +58,11 @@ Notable exclusions: traits, generics, closures, struct-like enum variants (`Foo 
 
 ## Architecture
 
-The interpreter is a single file (`theclown.py`) with four main components:
+The interpreter is a single file (`theclown.py`) with three main components:
 
-- **`Interpreter.evaluate(node)`** — recursive AST walker using `match`/`case` with a strict whitelist. The `case _:` arm raises `OutOfDepthError`.
+- **`Interpreter.evaluate(node)`** — recursive AST walker using `match`/`case` with a strict whitelist. The `case _:` arm raises `OutOfDepthError`. Macro arguments (e.g. `println!`) are handled by extracting raw text from tree-sitter's flat token trees and reparsing each argument to recover a proper AST.
 - **`Environment`** — a scope stack (`list[dict]`) supporting `define`, `get`, `set`, `move`, and `push_scope`/`pop_scope`.
 - **Function table** — all `fn` items are registered in a first pass. Each call gets a fresh isolated `Environment` (no closures).
-- **Pratt parser for `println!`** — tree-sitter represents macro arguments as flat token trees, so a small precedence-climbing parser evaluates expressions inside `println!`.
 
 ## Testing
 
